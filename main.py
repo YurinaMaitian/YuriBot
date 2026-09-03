@@ -13,6 +13,8 @@ from utils.state import get_group_by_index, is_group_enabled, save_state
 from utils.memory import record_message
 from utils.db import init_db
 from utils.scene_manager import check_and_update_scene, init_scenes_table
+from utils.ai import get_token, refresh_token
+from utils.actions import send_text
 
 app = FastAPI()
 
@@ -40,27 +42,6 @@ def build_prompt(key: str, current_msg: str) -> str:
     history = "\n".join([f"{m['user']}: {m['content']}" for m in list(ctx)[-8:]])
 
     return f"以下是对话上下文：\n{history}\n---\n现在问你：{current_msg}"
-
-
-# ========== Token 管理 ==========
-async def refresh_token():
-    global current_token
-    async with aiohttp.ClientSession() as session:
-        r = await session.post(
-            TOKEN_URL, json={"appId": APP_ID, "clientSecret": APP_SECRET}
-        )
-        data = await r.json()
-        if "access_token" not in data:
-            raise Exception(f"Token失败: {data}")
-        current_token = data["access_token"]
-        print(f"[Token] 已刷新: {current_token[:10]}...")
-        return current_token
-
-
-async def get_token():
-    if current_token is None:
-        return await refresh_token()
-    return current_token
 
 
 async def send_reply(url: str, content: str, msg_id: str):
@@ -121,7 +102,7 @@ async def dispatch_command(cmd: str, user_id: str, target=None) -> str:
     elif cmd == "status":
         return await handle_status(user_id)
     else:
-        return f"❓ 未知指令: /{cmd}\n可用: /on /off /status"
+        return f"❓ 未知指令: /{cmd}\n可用: /on /off /status /latex"
 
 
 # ========== 事件处理 ==========
@@ -157,6 +138,13 @@ async def process_event(data: dict):
                         return
                 else:
                     target = arg
+                if content.startswith("/latex "):
+                    from utils.commands import handle_latex
+
+                    return
+                await handle_latex(
+                    group_id, user_id, clean_content, msg_id, is_group=True
+                )
             reply = await dispatch_command(cmd, user_id, target)
         else:
             reply = await handle_chat(content, user_id=user_id, group_id="")
@@ -206,18 +194,20 @@ async def process_event(data: dict):
         check_and_update_scene(group_id, user_id, "user", clean_content)
 
         if clean_content.startswith("/"):
+            if clean_content.startswith("/latex "):
+                from utils.commands import handle_latex
+
+                await handle_latex(
+                    group_id, user_id, clean_content, msg_id, is_group=True
+                )
+
             parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
             reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
-        url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
-        await send_reply(url, reply, msg_id)
-
-        # 记录 Bot 自己的回复
-        record_message(group_id, user_id, "bot", reply)
-
+        await send_text(group_id, user_id, reply, msg_id, send_reply, is_group=True)
     # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
         group_id = d["group_openid"]
@@ -263,18 +253,21 @@ async def process_event(data: dict):
 
         # 生成回复
         if clean_content.startswith("/"):
+            if clean_content.startswith("/latex "):
+                from utils.commands import handle_latex
+
+                await handle_latex(
+                    group_id, user_id, clean_content, msg_id, is_group=True
+                )
+                return
+
             parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
             reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
-        # 发送
-        url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
-        await send_reply(url, reply, msg_id)
-
-        # 记录 Bot 回复
-        record_message(group_id, user_id, "bot", reply)
+        await send_text(group_id, user_id, reply, msg_id, send_reply, is_group=True)
         check_and_update_scene(group_id, user_id, "bot", reply)
 
 
