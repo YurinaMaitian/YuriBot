@@ -153,6 +153,10 @@ async def process_event(data: dict):
             if isinstance(result, str):
                 await send_text(group_id, user_id, result, msg_id, is_group=True)
             return
+        else:
+            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
+            await send_text(group_id, user_id, reply, msg_id, is_group=True)
+            await check_and_update_scene(group_id, user_id, "bot", reply)
 
     # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
@@ -206,6 +210,10 @@ async def process_event(data: dict):
             if isinstance(result, str):
                 await send_text(group_id, user_id, result, msg_id, is_group=True)
             return
+        else:
+            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
+            await send_text(group_id, user_id, reply, msg_id, is_group=True)
+            await check_and_update_scene(group_id, user_id, "bot", reply)
 
 
 def _extract_at_content(content: str) -> str:

@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager, rcParams
 import os
 import uuid
+from typing import Optional
+
+from core.registry import cmd
+from services.actions import send_text, send_image
 
 OUTPUT_DIR = "/tmp/qqbot/latex"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -12,72 +16,79 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ========== 自动扫描并配置中文字体 ==========
 def _setup_fonts():
-    cjk_candidates = []
-    for font in font_manager.fontManager.ttflist:
-        name = font.name
-        fname = font.fname.lower()
-        # 匹配常见中文字体
-        if any(
-            k in name
-            for k in [
-                "CJK",
-                "WenQuanYi",
-                "Noto Sans CJK",
-                "SimHei",
-                "Source Han",
-                "Droid Sans Fallback",
-                "AR PL UMing",
-                "Microsoft YaHei",
-                "Ubuntu",
-            ]
-        ):
-            cjk_candidates.append(font.name)
-        elif any(
-            k in fname
-            for k in [
-                "noto/sans/cjk",
-                "wqy",
-                "simhei",
-                "msyh",
-                "simsun",
-                "adobe/sourcehansans",
-                "opentype/noto",
-            ]
-        ):
-            cjk_candidates.append(font.name)
+    ttc_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 
-    # 去重并保持顺序
-    seen = set()
-    cjk_fonts = []
-    for f in cjk_candidates:
-        if f not in seen:
-            seen.add(f)
-            cjk_fonts.append(f)
+    # ========== 方案：提取 SC 子集到临时文件 ==========
+    if os.path.exists(ttc_path):
+        try:
+            from fontTools.ttLib import TTCollection
 
-    if cjk_fonts:
-        # 全局 sans-serif 回退链：中文字体优先
-        rcParams["font.family"] = ["sans-serif"]
-        rcParams["font.sans-serif"] = cjk_fonts + ["DejaVu Sans"]
+            ttc = TTCollection(ttc_path)
+            # NotoSansCJK-Regular.ttc 子集顺序: 0=JP, 1=KR, 2=SC, 3=TC
+            sc_font = ttc[2]
+
+            # 保存为临时 OTF
+            tmp_dir = "/tmp/qqbot/fonts"
+            os.makedirs(tmp_dir, exist_ok=True)
+            sc_path = os.path.join(tmp_dir, "NotoSansCJKsc-Regular.otf")
+
+            if not os.path.exists(sc_path):
+                sc_font.save(sc_path)
+                print(f"[LaTeX] 已提取 SC 子集到: {sc_path}")
+
+            # 手动注册到 matplotlib
+            fe = font_manager.FontEntry(
+                fname=sc_path,
+                name="Noto Sans CJK SC",
+                style="normal",
+                variant="normal",
+                weight=400,
+                stretch="normal",
+                size="scalable",
+            )
+            font_manager.fontManager.ttflist.insert(0, fe)
+
+            rcParams["font.family"] = ["Noto Sans CJK SC"]
+            rcParams["axes.unicode_minus"] = False
+            rcParams["mathtext.fontset"] = "custom"
+            rcParams["mathtext.rm"] = "Noto Sans CJK SC"
+            rcParams["mathtext.it"] = "Noto Sans CJK SC"
+            rcParams["mathtext.bf"] = "Noto Sans CJK SC"
+            rcParams["mathtext.sf"] = "Noto Sans CJK SC"
+            rcParams["mathtext.tt"] = "Noto Sans CJK SC"
+            rcParams["mathtext.cal"] = "Noto Sans CJK SC"
+
+            print("[LaTeX] 已强制使用 Noto Sans CJK SC（简体中文）")
+            return
+
+        except ImportError:
+            print("[LaTeX] 未安装 fontTools，尝试兜底方案...")
+        except Exception as e:
+            print(f"[LaTeX] 提取子集失败: {e}")
+
+    # ========== 兜底：直接用 WenQuanYi ==========
+    wqy_path = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
+    if os.path.exists(wqy_path):
+        fp = font_manager.FontProperties(fname=wqy_path)
+        name = fp.get_name()
+        rcParams["font.family"] = [name]
         rcParams["axes.unicode_minus"] = False
-
-        # mathtext 自定义字体集 —— 这是 \text{} 能显示中文的关键
         rcParams["mathtext.fontset"] = "custom"
-        rcParams["mathtext.rm"] = cjk_fonts[0]
-        rcParams["mathtext.it"] = cjk_fonts[0] + ":italic"
-        rcParams["mathtext.bf"] = cjk_fonts[0] + ":bold"
-        rcParams["mathtext.sf"] = cjk_fonts[0]
-        rcParams["mathtext.tt"] = cjk_fonts[0]
-        rcParams["mathtext.cal"] = cjk_fonts[0]
-
-        print(f"[LaTeX] 已配置中文字体: {cjk_fonts[0]}")
+        rcParams["mathtext.rm"] = name
+        rcParams["mathtext.it"] = name
+        rcParams["mathtext.bf"] = name
+        rcParams["mathtext.sf"] = name
+        rcParams["mathtext.tt"] = name
+        rcParams["mathtext.cal"] = name
+        print(f"[LaTeX] 兜底使用: {name}")
     else:
-        print("[LaTeX] 警告: 系统未安装中文字体，中文将显示为方框")
+        print("[LaTeX] 警告: 找不到任何中文字体")
 
 
 _setup_fonts()
 
 
-def render_latex(formula: str, filename: str = None) -> str:
+def _render(formula: str, filename: str = None) -> Optional[str]:
     if not filename:
         filename = f"{uuid.uuid4()}.png"
     output_path = os.path.join(OUTPUT_DIR, filename)
@@ -107,7 +118,29 @@ def render_latex(formula: str, filename: str = None) -> str:
         )
         plt.close(fig)
         return output_path
-
     except Exception as e:
         print(f"[LaTeX渲染失败] {e}")
         return None
+
+
+@cmd("latex", desc="渲染LaTeX公式为图片，用法: /latex \\int_0^1 x^2 dx")
+async def latex_cmd(ctx):
+    formula = ctx.raw.strip()
+    if not formula:
+        return "用法：/latex \\int_0^1 x^2 dx"
+
+    img_path = _render(formula)
+    if not img_path:
+        return "公式渲染失败了，检查一下语法？"
+
+    success = await send_image(
+        ctx.group_id,
+        ctx.user_id,
+        img_path,
+        description=f"LaTeX公式：{formula[:50]}",
+        msg_id=ctx.msg_id,
+        is_group=ctx.is_group,
+    )
+    if not success:
+        return "图片上传失败了..."
+    return None  # 已自行发送，框架不再发文字
