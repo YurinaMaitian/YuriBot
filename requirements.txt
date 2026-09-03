@@ -1,0 +1,14 @@
+aiohttp
+websockets
+python-dotenv
+
+
+
+
+
+
+
+
+
+
+

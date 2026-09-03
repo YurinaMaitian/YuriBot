@@ -1,0 +1,37 @@
+.env
+data/
+__pycache__/
+*.pyc
+async def send_reply(url: str, content: str, msg_id: str)0
+    # 调试：如果 content 为空，直接打日志
+    if not content or not content.strip():
+        print(f"[警告] 尝试发送空消息到 {url}, msg_id={msg_id}")
+        return
+
+    token = await get_token()
+    headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
+    payload = {
+        "content": content,
+        "msg_type": 0,
+        "msg_id": msg_id,
+        "msg_seq": int(time.time()),  # ← 改成时间戳，避免防重
+    }
+    print(f"[发送] content={content[:40]}..., msg_seq={payload['msg_seq']}")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as r:
+            resp = await r.json()
+            print(f"[API返回] 状态:{r.status}, 内容:{resp}")
+*.log
+
+
+
+
+
+
+
+
+
+
+
+bot.py
