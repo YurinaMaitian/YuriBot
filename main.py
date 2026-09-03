@@ -157,7 +157,7 @@ async def process_event(data: dict):
             reply = await dispatch_command(cmd, user_id, target)
         else:
             prompt = build_prompt(user_id, content)
-            reply = await handle_chat(prompt)
+            reply = await handle_chat(content, user_id=user_id)
 
         url = f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
         await send_reply(url, reply, msg_id)
@@ -194,7 +194,7 @@ async def process_event(data: dict):
             reply = await dispatch_command(cmd, user_id)
         else:
             prompt = build_prompt(group_id, content)
-            reply = await handle_chat(prompt)
+            reply = await handle_chat(content, user_id=user_id)
 
         url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         await send_reply(url, reply, msg_id)
@@ -246,7 +246,7 @@ async def process_event(data: dict):
             reply = await dispatch_command(cmd, user_id)
         else:
             prompt = build_prompt(group_id, clean_content)
-            reply = await handle_chat(prompt)
+            reply = await handle_chat(clean_content, user_id=user_id)
 
         url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         await send_reply(url, reply, msg_id)
