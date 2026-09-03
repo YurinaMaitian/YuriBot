@@ -48,3 +48,11 @@ def auto_discover(package: str = "tools"):
                 print(f"[注册失败] {full}: {e}")
     except ImportError as e:
         print(f"[注册] 包 {package} 不存在: {e}")
+
+
+def get_panel_commands() -> list[dict]:
+    """生成QQ指令面板需要的格式"""
+    result = []
+    for name, desc in _help.items():
+        result.append({"name": name, "description": desc or f"使用 /{name}"})
+    return result

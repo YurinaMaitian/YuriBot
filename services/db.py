@@ -18,6 +18,21 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                openid TEXT PRIMARY KEY,
+                nickname TEXT DEFAULT ''
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS groups (
+                openid TEXT PRIMARY KEY,
+                name TEXT DEFAULT ''
+            )
+        """)
+
         await db.commit()
 
 

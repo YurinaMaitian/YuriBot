@@ -13,22 +13,39 @@ def _get_key(group_id: str, user_id: str) -> str:
 
 
 async def _lazy_load(key: str, group_id: str, user_id: str):
+    from services.user_manager import get_nickname
+
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
-            SELECT speaker, content FROM messages
-            WHERE group_id = ? AND (speaker_id = ? OR speaker_id = 'yuribot')
-            ORDER BY created_at DESC LIMIT 20
-        """,
-            (group_id or "", user_id),
-        ) as cursor:
-            rows = await cursor.fetchall()
+        if group_id:
+            async with db.execute(
+                """
+                SELECT speaker, speaker_id, content FROM messages
+                WHERE group_id = ? ORDER BY created_at DESC LIMIT 20
+            """,
+                (group_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute(
+                """
+                SELECT speaker, speaker_id, content FROM messages
+                WHERE group_id = '' AND (speaker_id = ? OR speaker_id = 'yuribot')
+                ORDER BY created_at DESC LIMIT 20
+            """,
+                (user_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
 
     if rows:
         _hot_cache[key] = deque(maxlen=50)
-        for speaker, content in reversed(rows):
-            display = "你" if speaker == "bot" else "对方"
-            _hot_cache[key].append({"speaker": display, "content": content[:200]})
+        for speaker, speaker_id, content in reversed(rows):
+            if speaker == "bot":
+                identity = "YuriBot"
+            else:
+                identity = await get_nickname(speaker_id)
+            _hot_cache[key].append(
+                {"speaker": speaker, "identity": identity, "content": content[:200]}
+            )
         print(f"[缓存恢复] key={key[:20]}, 恢复{len(rows)}条")
 
 
@@ -38,8 +55,14 @@ async def record_message(group_id: str, user_id: str, speaker: str, content: str
         await _lazy_load(key, group_id, user_id)
     if key not in _hot_cache:
         _hot_cache[key] = deque(maxlen=50)
-    display = "你" if speaker == "bot" else "对方"
-    _hot_cache[key].append({"speaker": display, "content": content[:200]})
+
+    from services.user_manager import get_nickname
+
+    identity = "YuriBot" if speaker == "bot" else await get_nickname(user_id)
+    _hot_cache[key].append(
+        {"speaker": speaker, "identity": identity, "content": content[:200]}
+    )
+
     db_speaker_id = "yuribot" if speaker == "bot" else user_id
     await save_message(group_id, speaker, db_speaker_id, content)
 
@@ -53,6 +76,7 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
     from core.router import route
     from core.scene import get_current_scene
     from core.preference import get_relevant_preferences
+    from services.user_manager import get_nickname
 
     plan = await route(current_msg)
     print(f"[Router] 计划: {plan}")
@@ -72,7 +96,7 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
 
     ctx = get_context(group_id, user_id)
     if ctx:
-        history_lines = [f"{m['speaker']}：{m['content']}" for m in ctx]
+        history_lines = [f"{m['identity']}：{m['content']}" for m in ctx]
         all_text = "\n".join(history_lines)
         if len(all_text) < 600:
             history = all_text
@@ -81,7 +105,8 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
             history = "\n".join(recent)
         lines.append(f"【刚才】\n{history}")
 
-    lines.append(f'对方说："{current_msg}"')
+    nick = await get_nickname(user_id)
+    lines.append(f'{nick}说："{current_msg}"')
     lines.append("直接回复，不要解释你在干嘛。")
 
     return "\n".join(lines)

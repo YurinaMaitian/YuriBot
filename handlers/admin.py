@@ -4,6 +4,7 @@ from services.state import (
     set_global_state,
     get_group_by_index,
 )
+from services.user_manager import get_group_name
 from core.registry import cmd
 
 state = load_state()
@@ -58,6 +59,7 @@ async def handle_status(ctx):
         lines.append("📋 群列表：")
         for i, (gid, enabled) in enumerate(state["groups"].items(), 1):
             flag = "✅" if enabled is True else ("⏸️" if enabled is False else "🌐")
-            lines.append(f"  {i}. {gid[:14]}... {flag}")
+            gname = await get_group_name(gid)
+            lines.append(f"  {i}. {gname} {flag}")
         lines.append("用法：/off 1 或 /on 2")
     return "\n".join(lines)

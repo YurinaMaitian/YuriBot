@@ -1,8 +1,10 @@
 import asyncio
 import json
 import uvicorn
-import handlers.admin  # 触发 @cmd 注册
-import tools.latex  # 触发 @cmd 注册
+import handlers.admin
+import handlers.chat
+import handlers.owner
+import tools.latex
 from fastapi import FastAPI, Request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -13,13 +15,13 @@ from core.context import CmdContext
 from core.memory import record_message
 from services.db import init_db
 from services.state import load_state, is_group_enabled, set_group_state
+from services.user_manager import get_nickname, get_group_name
 from utils.scene_manager import check_and_update_scene, init_scenes_table
 from core.ai import refresh_token
 from services.actions import send_text
 
 app = FastAPI()
 
-# ========== 消息去重（加锁） ==========
 _processed_ids = set()
 _dedup_lock = asyncio.Lock()
 
@@ -34,7 +36,6 @@ async def is_duplicate(msg_id: str) -> bool:
         return False
 
 
-# ========== 签名验证（防御空 Secret） ==========
 def generate_signature(event_ts: str, plain_token: str) -> str:
     seed = APP_SECRET.encode("utf-8")
     if not seed:
@@ -49,7 +50,6 @@ def generate_signature(event_ts: str, plain_token: str) -> str:
     return signature.hex()
 
 
-# ========== 事件处理 ==========
 async def process_event(data: dict):
     event = data.get("t")
     d = data.get("d", {})
@@ -64,12 +64,12 @@ async def process_event(data: dict):
         f"user_id={d.get('author', {}).get('member_openid') or d.get('author', {}).get('id')}"
     )
 
-    # ---------- 私聊 ----------
     if event == "C2C_MESSAGE_CREATE":
         user_id = d["author"]["id"]
         content = d.get("content", "").strip()
         msg_id = d["id"]
-        print(f"[私聊] {user_id}: {content}")
+        nick = await get_nickname(user_id)
+        print(f"[私聊] {nick}: {content}")
 
         await record_message("", user_id, "user", content)
 
@@ -100,11 +100,9 @@ async def process_event(data: dict):
                 await send_text("", user_id, result, msg_id, is_group=False)
             return
 
-        # 非命令，走 AI 聊天
         reply = await handle_chat(content, user_id=user_id, group_id="")
         await send_text("", user_id, reply, msg_id, is_group=False)
 
-    # ---------- 群聊 @ ----------
     elif event == "GROUP_AT_MESSAGE_CREATE":
         group_id = d["group_openid"]
         user_id = d["author"]["member_openid"]
@@ -112,7 +110,9 @@ async def process_event(data: dict):
         msg_id = d["id"]
 
         clean_content = _extract_at_content(content)
-        print(f"[群聊@] {group_id}: {clean_content}")
+        nick = await get_nickname(user_id)
+        gname = await get_group_name(group_id)
+        print(f"[群聊@] {gname} | {nick}: {clean_content}")
 
         state = load_state()
         if group_id not in state["groups"]:
@@ -158,7 +158,6 @@ async def process_event(data: dict):
             await send_text(group_id, user_id, reply, msg_id, is_group=True)
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
-    # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
         group_id = d["group_openid"]
         user_id = d["author"]["member_openid"]
@@ -182,7 +181,9 @@ async def process_event(data: dict):
             if "yuri" not in content.lower() and "bot" not in content.lower():
                 return
 
-        print(f"[群聊{'@' if is_at_bot else '免@'}] {group_id}: {clean_content}")
+        nick = await get_nickname(user_id)
+        gname = await get_group_name(group_id)
+        print(f"[群聊{'@' if is_at_bot else '免@'}] {gname} | {nick}: {clean_content}")
 
         if clean_content.startswith("/"):
             parts = clean_content.split(maxsplit=1)
