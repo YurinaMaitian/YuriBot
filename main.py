@@ -12,6 +12,7 @@ from handlers.chat import handle_chat
 from utils.state import get_group_by_index, is_group_enabled, save_state
 from utils.memory import record_message
 from utils.db import init_db
+from utils.scene_manager import check_and_update_scene, init_scenes_table
 
 app = FastAPI()
 
@@ -202,6 +203,7 @@ async def process_event(data: dict):
 
         # 记录用户消息
         record_message(group_id, user_id, "user", clean_content)
+        check_and_update_scene(group_id, user_id, "user", clean_content)
 
         if clean_content.startswith("/"):
             parts = clean_content.split()
@@ -223,16 +225,16 @@ async def process_event(data: dict):
         content = d.get("content", "").strip()
         msg_id = d["id"]
 
-        # 1. 记录群
+        # 记录群
         if group_id not in state["groups"]:
             state["groups"][group_id] = None
             save_state(state)
 
-        # 2. 检查开关
+        # 检查开关
         if not is_group_enabled(state, group_id):
             return
 
-        # 3. 判断是否是 @Bot（精确匹配）
+        # 判断是否是 @Bot
         is_at_bot = False
         clean_content = content
 
@@ -244,32 +246,36 @@ async def process_event(data: dict):
                     is_at_bot = True
                     clean_content = content[end_idx + 1 :].strip()
 
-        # 4. 所有消息都 push 进记忆（不管@不@）
-        # 用 clean_content 记（去掉@前缀后的实际内容）
-        record_context(group_id, user_id, clean_content if is_at_bot else content)
+        # 所有消息都 push 进记忆
+        record_message(
+            group_id, user_id, "user", clean_content if is_at_bot else content
+        )
+        check_and_update_scene(
+            group_id, user_id, "user", clean_content if is_at_bot else content
+        )
 
-        # 5. 决定是否回答
+        # 决定是否回答
         if not is_at_bot:
-            # 免@模式：只有含关键词才回答
             if "yuri" not in content.lower() and "bot" not in content.lower():
-                return  # 不回答，但记忆已记录
+                return
 
         print(f"[群聊{'@' if is_at_bot else '免@'}] {group_id}: {clean_content}")
 
-        # 6. 回答
+        # 生成回复
         if clean_content.startswith("/"):
             parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
-            prompt = build_prompt(group_id, clean_content)
-            reply = await handle_chat(prompt, user_id=user_id, group_id=group_id)
+            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
+        # 发送
         url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         await send_reply(url, reply, msg_id)
 
-        # 记录 Bot 自己的回复
+        # 记录 Bot 回复
         record_message(group_id, user_id, "bot", reply)
+        check_and_update_scene(group_id, user_id, "bot", reply)
 
 
 # ========== Webhook 签名验证 ==========
@@ -332,6 +338,7 @@ async def token_refresh_loop():
 @app.on_event("startup")
 async def startup():
     init_db()  # 初始化数据库
+    init_scenes_table()
     asyncio.create_task(token_refresh_loop())
 
 

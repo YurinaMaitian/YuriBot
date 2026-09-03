@@ -41,7 +41,7 @@ async def get_ai_reply(user_message: str, user_id: str = "", group_id: str = "")
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": full_prompt},
