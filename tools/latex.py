@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from matplotlib.font_manager import FontProperties
 import os
+import uuid
+from core.registry import cmd
+from services.actions import send_text, send_image
 
 OUTPUT_DIR = "/tmp/qqbot/latex"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -28,12 +31,9 @@ if _cjk_font:
     rcParams["mathtext.fontset"] = "custom"
 
 
-def render_latex(formula: str, filename: str = None) -> str:
+def _render(formula: str, filename: str = None) -> str:
     if not filename:
-        import uuid
-
         filename = f"{uuid.uuid4()}.png"
-
     output_path = os.path.join(OUTPUT_DIR, filename)
 
     clean_formula = formula.strip()
@@ -42,7 +42,6 @@ def render_latex(formula: str, filename: str = None) -> str:
 
     try:
         fig = plt.figure(figsize=(max(4, len(clean_formula) * 0.25), 1.2))
-
         text_args = {
             "x": 0.5,
             "y": 0.5,
@@ -54,7 +53,6 @@ def render_latex(formula: str, filename: str = None) -> str:
         }
         if _cjk_font:
             text_args["fontproperties"] = _cjk_font
-
         fig.text(**text_args)
         fig.patch.set_facecolor("white")
         fig.savefig(
@@ -65,9 +63,30 @@ def render_latex(formula: str, filename: str = None) -> str:
             facecolor="white",
         )
         plt.close(fig)
-
         return output_path
-
     except Exception as e:
         print(f"[LaTeX渲染失败] {e}")
         return None
+
+
+@cmd("latex", desc="渲染LaTeX公式为图片，用法: /latex \\int_0^1 x^2 dx")
+async def latex_cmd(ctx):
+    formula = ctx.raw.strip()
+    if not formula:
+        return "用法：/latex \\int_0^1 x^2 dx"
+
+    img_path = _render(formula)
+    if not img_path:
+        return "公式渲染失败了，检查一下语法？"
+
+    success = await send_image(
+        ctx.group_id,
+        ctx.user_id,
+        img_path,
+        description=f"LaTeX公式：{formula[:50]}",
+        msg_id=ctx.msg_id,
+        is_group=ctx.is_group,
+    )
+    if not success:
+        return "图片上传失败了..."
+    return None  # 返回 None 表示已经自己处理过发送，框架不再发文字

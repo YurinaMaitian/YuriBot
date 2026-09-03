@@ -6,10 +6,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from config import APP_ID, APP_SECRET, BOT_OPENID
 from handlers.chat import handle_chat
-from handlers.commands import handle_latex, dispatch_command
-from services.state import load_state, is_group_enabled, set_group_state
+from core.registry import get_handler, get_help, auto_discover
+from core.context import CmdContext
 from core.memory import record_message
 from services.db import init_db
+from services.state import load_state, is_group_enabled, set_group_state
 from utils.scene_manager import check_and_update_scene, init_scenes_table
 from core.ai import refresh_token
 from services.actions import send_text
@@ -70,36 +71,35 @@ async def process_event(data: dict):
 
         await record_message("", user_id, "user", content)
 
-        if content.startswith("/latex "):
-            await handle_latex("", user_id, content, msg_id, is_group=False)
+        if content.startswith("/"):
+            parts = content.split(maxsplit=1)
+            cmd_name = parts[0][1:]
+            raw = parts[1] if len(parts) > 1 else ""
+            args = raw.split() if raw else []
+
+            handler = get_handler(cmd_name)
+            if not handler:
+                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                await send_text("", user_id, reply, msg_id, is_group=False)
+                return
+
+            ctx = CmdContext(
+                group_id="",
+                user_id=user_id,
+                msg_id=msg_id,
+                is_group=False,
+                cmd=cmd_name,
+                args=args,
+                raw=raw,
+                state=load_state(),
+            )
+            result = await handler(ctx)
+            if isinstance(result, str):
+                await send_text("", user_id, result, msg_id, is_group=False)
             return
 
-        if content.startswith("/"):
-            parts = content.split()
-            cmd = parts[0][1:]
-            target = None
-            if len(parts) > 1:
-                arg = parts[1]
-                if arg.isdigit():
-                    from services.state import get_group_by_index
-
-                    state = load_state()
-                    target = get_group_by_index(state, int(arg))
-                    if target is None:
-                        await send_text(
-                            "",
-                            user_id,
-                            "❌ 序号不存在，用 /status 查看列表",
-                            msg_id,
-                            is_group=False,
-                        )
-                        return
-                else:
-                    target = arg
-            reply = await dispatch_command(cmd, user_id, target)
-        else:
-            reply = await handle_chat(content, user_id=user_id, group_id="")
-
+        # 非命令，走 AI 聊天
+        reply = await handle_chat(content, user_id=user_id, group_id="")
         await send_text("", user_id, reply, msg_id, is_group=False)
 
     # ---------- 群聊 @ ----------
@@ -125,19 +125,32 @@ async def process_event(data: dict):
         await record_message(group_id, user_id, "user", clean_content)
         await check_and_update_scene(group_id, user_id, "user", clean_content)
 
-        if clean_content.startswith("/latex "):
-            await handle_latex(group_id, user_id, clean_content, msg_id, is_group=True)
-            return
-
         if clean_content.startswith("/"):
-            parts = clean_content.split()
-            cmd = parts[0][1:]
-            reply = await dispatch_command(cmd, user_id)
-        else:
-            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
+            parts = clean_content.split(maxsplit=1)
+            cmd_name = parts[0][1:]
+            raw = parts[1] if len(parts) > 1 else ""
+            args = raw.split() if raw else []
 
-        await send_text(group_id, user_id, reply, msg_id, is_group=True)
-        await check_and_update_scene(group_id, user_id, "bot", reply)
+            handler = get_handler(cmd_name)
+            if not handler:
+                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                await send_text(group_id, user_id, reply, msg_id, is_group=True)
+                return
+
+            ctx = CmdContext(
+                group_id=group_id,
+                user_id=user_id,
+                msg_id=msg_id,
+                is_group=True,
+                cmd=cmd_name,
+                args=args,
+                raw=raw,
+                state=load_state(),
+            )
+            result = await handler(ctx)
+            if isinstance(result, str):
+                await send_text(group_id, user_id, result, msg_id, is_group=True)
+            return
 
     # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
@@ -165,19 +178,32 @@ async def process_event(data: dict):
 
         print(f"[群聊{'@' if is_at_bot else '免@'}] {group_id}: {clean_content}")
 
-        if clean_content.startswith("/latex "):
-            await handle_latex(group_id, user_id, clean_content, msg_id, is_group=True)
-            return
-
         if clean_content.startswith("/"):
-            parts = clean_content.split()
-            cmd = parts[0][1:]
-            reply = await dispatch_command(cmd, user_id)
-        else:
-            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
+            parts = clean_content.split(maxsplit=1)
+            cmd_name = parts[0][1:]
+            raw = parts[1] if len(parts) > 1 else ""
+            args = raw.split() if raw else []
 
-        await send_text(group_id, user_id, reply, msg_id, is_group=True)
-        await check_and_update_scene(group_id, user_id, "bot", reply)
+            handler = get_handler(cmd_name)
+            if not handler:
+                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                await send_text(group_id, user_id, reply, msg_id, is_group=True)
+                return
+
+            ctx = CmdContext(
+                group_id=group_id,
+                user_id=user_id,
+                msg_id=msg_id,
+                is_group=True,
+                cmd=cmd_name,
+                args=args,
+                raw=raw,
+                state=load_state(),
+            )
+            result = await handler(ctx)
+            if isinstance(result, str):
+                await send_text(group_id, user_id, result, msg_id, is_group=True)
+            return
 
 
 def _extract_at_content(content: str) -> str:
@@ -249,6 +275,8 @@ async def token_refresh_loop():
 async def startup():
     await init_db()
     await init_scenes_table()
+    auto_discover("tools")
+    auto_discover("handlers")
     asyncio.create_task(token_refresh_loop())
 
 
