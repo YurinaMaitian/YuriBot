@@ -10,6 +10,8 @@ from config import APP_ID, APP_SECRET, TOKEN_URL, BOT_OPENID
 from handlers.admin import handle_on, handle_off, handle_status, state
 from handlers.chat import handle_chat
 from utils.state import get_group_by_index, is_group_enabled, save_state
+from utils.memory import record_message
+from utils.db import init_db
 
 app = FastAPI()
 
@@ -136,8 +138,8 @@ async def process_event(data: dict):
         msg_id = d["id"]
         print(f"[私聊] {user_id}: {content}")
 
-        # 先记录上下文（即使是指令也记录，保持对话连贯）
-        record_context(user_id, user_id, content)
+        # 记录用户消息
+        record_message("", user_id, "user", content)
 
         if content.startswith("/"):
             parts = content.split()
@@ -156,11 +158,13 @@ async def process_event(data: dict):
                     target = arg
             reply = await dispatch_command(cmd, user_id, target)
         else:
-            prompt = build_prompt(user_id, content)
-            reply = await handle_chat(content, user_id=user_id)
+            reply = await handle_chat(content, user_id=user_id, group_id="")
 
         url = f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
         await send_reply(url, reply, msg_id)
+
+        # 记录 Bot 自己的回复
+        record_message("", user_id, "bot", reply)
 
     # ---------- 群聊 @ ----------
     elif event == "GROUP_AT_MESSAGE_CREATE":
@@ -169,10 +173,21 @@ async def process_event(data: dict):
         content = d.get("content", "").strip()
         msg_id = d["id"]
 
-        if content.startswith("@") and " " in content:
-            content = content.split(" ", 1)[1].strip()
+        # 去掉 @<id> 前缀
+        if content.startswith("<@"):
+            end_idx = content.find(">")
+            if end_idx != -1:
+                mentioned_id = content[2:end_idx]
+                if mentioned_id == BOT_OPENID:
+                    clean_content = content[end_idx + 1 :].strip()
+                else:
+                    clean_content = content
+            else:
+                clean_content = content
+        else:
+            clean_content = content
 
-        print(f"[群聊@] {group_id}: {content}")
+        print(f"[群聊@] {group_id}: {clean_content}")
 
         # 记录群
         if group_id not in state["groups"]:
@@ -185,19 +200,21 @@ async def process_event(data: dict):
             await send_reply(url, "⏸️ 当前群 Bot 未开启", msg_id)
             return
 
-        # 记录上下文
-        record_context(group_id, user_id, content)
+        # 记录用户消息
+        record_message(group_id, user_id, "user", clean_content)
 
-        if content.startswith("/"):
-            parts = content.split()
+        if clean_content.startswith("/"):
+            parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
-            prompt = build_prompt(group_id, content)
-            reply = await handle_chat(content, user_id=user_id)
+            reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
         url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         await send_reply(url, reply, msg_id)
+
+        # 记录 Bot 自己的回复
+        record_message(group_id, user_id, "bot", reply)
 
     # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
@@ -246,10 +263,13 @@ async def process_event(data: dict):
             reply = await dispatch_command(cmd, user_id)
         else:
             prompt = build_prompt(group_id, clean_content)
-            reply = await handle_chat(clean_content, user_id=user_id)
+            reply = await handle_chat(prompt, user_id=user_id, group_id=group_id)
 
         url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         await send_reply(url, reply, msg_id)
+
+        # 记录 Bot 自己的回复
+        record_message(group_id, user_id, "bot", reply)
 
 
 # ========== Webhook 签名验证 ==========
@@ -311,6 +331,7 @@ async def token_refresh_loop():
 
 @app.on_event("startup")
 async def startup():
+    init_db()  # 初始化数据库
     asyncio.create_task(token_refresh_loop())
 
 

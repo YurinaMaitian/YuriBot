@@ -2,7 +2,7 @@ import os
 import aiohttp
 import json
 from config import DEEPSEEK_API_KEY, DEEPSEEK_URL
-from utils.scene import build_context  # ← 新增导入
+from utils.memory import build_prompt
 
 PERSONA_DIR = "/home/minds/qqbot/data/persona"
 
@@ -29,12 +29,12 @@ def load_persona():
 SYSTEM_PROMPT = load_persona()
 
 
-async def get_ai_reply(user_message: str, user_id: str = "") -> str:
+async def get_ai_reply(user_message: str, user_id: str = "", group_id: str = "") -> str:
     if not user_message or not user_message.strip():
         return "……（没听见）"
 
-    # 组装带情境的 prompt
-    full_prompt = build_context(user_id, user_message)
+    # 组装带上下文的 prompt
+    full_prompt = build_prompt(group_id, user_id, user_message)
 
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -46,7 +46,7 @@ async def get_ai_reply(user_message: str, user_id: str = "") -> str:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": full_prompt},
         ],
-        "max_tokens": 120,
+        "max_tokens": 250,
         "temperature": 0.8,
     }
 
@@ -56,7 +56,6 @@ async def get_ai_reply(user_message: str, user_id: str = "") -> str:
                 DEEPSEEK_URL, headers=headers, json=payload, timeout=15
             ) as r:
                 raw_text = await r.text()
-                print(f"[AI原始返回] 状态:{r.status}")
 
                 if r.status != 200:
                     return "AI服务开小差了，稍后再试"
@@ -69,6 +68,5 @@ async def get_ai_reply(user_message: str, user_id: str = "") -> str:
 
                 return reply
 
-    except Exception as e:
-        print(f"[AI异常] {type(e).__name__}: {e}")
+    except Exception:
         return "AI出错了"
