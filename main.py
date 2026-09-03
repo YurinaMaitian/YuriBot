@@ -1,116 +1,64 @@
 import asyncio
-import time
 import json
-import aiohttp
 import uvicorn
-from collections import deque
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from config import APP_ID, APP_SECRET, TOKEN_URL, BOT_OPENID
-from handlers.admin import handle_on, handle_off, handle_status, state
+
+from config import APP_ID, APP_SECRET, BOT_OPENID
 from handlers.chat import handle_chat
-from utils.state import get_group_by_index, is_group_enabled, save_state
-from utils.memory import record_message
-from utils.db import init_db
+from handlers.commands import handle_latex, dispatch_command
+from services.state import load_state, is_group_enabled, set_group_state
+from core.memory import record_message
+from services.db import init_db
 from utils.scene_manager import check_and_update_scene, init_scenes_table
-from utils.ai import get_token, refresh_token
-from utils.actions import send_text
+from core.ai import refresh_token
+from services.actions import send_text
 
 app = FastAPI()
 
-current_token = None
-
-# ========== 短期上下文缓存 ==========
-# key: user_id(私聊) 或 group_id(群聊) -> deque(maxlen=15)
-group_contexts = {}
+# ========== 消息去重（加锁） ==========
+_processed_ids = set()
+_dedup_lock = asyncio.Lock()
 
 
-def record_context(key: str, user_id: str, content: str):
-    """记录消息到短期上下文"""
-    if key not in group_contexts:
-        group_contexts[key] = deque(maxlen=15)
-    group_contexts[key].append({"user": user_id[:8], "content": content[:100]})
+async def is_duplicate(msg_id: str) -> bool:
+    async with _dedup_lock:
+        if msg_id in _processed_ids:
+            return True
+        _processed_ids.add(msg_id)
+        if len(_processed_ids) > 1000:
+            _processed_ids.clear()
+        return False
 
 
-def build_prompt(key: str, current_msg: str) -> str:
-    """组装带上下文的 prompt"""
-    ctx = group_contexts.get(key)
-    if not ctx:
-        return current_msg
-
-    # 取最近 8 条，避免太长
-    history = "\n".join([f"{m['user']}: {m['content']}" for m in list(ctx)[-8:]])
-
-    return f"以下是对话上下文：\n{history}\n---\n现在问你：{current_msg}"
-
-
-async def send_reply(url: str, content: str, msg_id: str):
-    """发送回复，自动分条，Token过期自动刷新"""
-    if not content or not content.strip():
-        print(f"[警告] 尝试发送空消息")
-        return
-
-    token = await get_token()
-    headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
-
-    # 按段落拆分
-    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-    if len(paragraphs) == 1:
-        paragraphs = [p.strip() for p in content.split("\n") if p.strip()]
-
-    final_chunks = []
-    for p in paragraphs:
-        if len(p) > 900:
-            while p:
-                final_chunks.append(p[:800])
-                p = p[800:].strip()
-        else:
-            final_chunks.append(p)
-
-    # 逐条发送
-    for i, chunk in enumerate(final_chunks, start=1):
-        payload = {"content": chunk, "msg_type": 0, "msg_id": msg_id, "msg_seq": i}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as r:
-                resp = await r.json()
-
-                # ========== 关键修复：Token过期自动刷新重试 ==========
-                if r.status == 401 and "AccessToken无效" in str(resp):
-                    print("[Token] 过期，自动刷新...")
-                    global current_token
-                    current_token = await refresh_token()
-
-                    # 重试一次
-                    headers["Authorization"] = f"QQBot {current_token}"
-                    async with session.post(url, headers=headers, json=payload) as r2:
-                        print(f"[发送{i}/{len(final_chunks)}] 重试状态:{r2.status}")
-                else:
-                    print(
-                        f"[发送{i}/{len(final_chunks)}] {chunk[:40]}... 状态:{r.status}"
-                    )
-
-        if i < len(final_chunks):
-            await asyncio.sleep(0.5)
-
-
-async def dispatch_command(cmd: str, user_id: str, target=None) -> str:
-    if cmd == "on":
-        return await handle_on(user_id, target)
-    elif cmd == "off":
-        return await handle_off(user_id, target)
-    elif cmd == "status":
-        return await handle_status(user_id)
+# ========== 签名验证（防御空 Secret） ==========
+def generate_signature(event_ts: str, plain_token: str) -> str:
+    seed = APP_SECRET.encode("utf-8")
+    if not seed:
+        raise ValueError("APP_SECRET is empty")
+    if len(seed) < 32:
+        seed = (seed * (32 // len(seed) + 1))[:32]
     else:
-        return f"❓ 未知指令: /{cmd}\n可用: /on /off /status /latex"
+        seed = seed[:32]
+    private_key = Ed25519PrivateKey.from_private_bytes(seed)
+    message = (event_ts + plain_token).encode("utf-8")
+    signature = private_key.sign(message)
+    return signature.hex()
 
 
 # ========== 事件处理 ==========
 async def process_event(data: dict):
     event = data.get("t")
     d = data.get("d", {})
+    msg_id = d.get("id")
+
+    if msg_id and await is_duplicate(msg_id):
+        print(f"[去重] 跳过重复消息 {msg_id[:8]}")
+        return
+
     print(
-        f"[process_event] event={event}, group_id={d.get('group_openid')}, user_id={d.get('author', {}).get('member_openid') or d.get('author', {}).get('id')}"
+        f"[process_event] event={event}, group_id={d.get('group_openid')}, "
+        f"user_id={d.get('author', {}).get('member_openid') or d.get('author', {}).get('id')}"
     )
 
     # ---------- 私聊 ----------
@@ -120,8 +68,11 @@ async def process_event(data: dict):
         msg_id = d["id"]
         print(f"[私聊] {user_id}: {content}")
 
-        # 记录用户消息
-        record_message("", user_id, "user", content)
+        await record_message("", user_id, "user", content)
+
+        if content.startswith("/latex "):
+            await handle_latex("", user_id, content, msg_id, is_group=False)
+            return
 
         if content.startswith("/"):
             parts = content.split()
@@ -130,30 +81,26 @@ async def process_event(data: dict):
             if len(parts) > 1:
                 arg = parts[1]
                 if arg.isdigit():
+                    from services.state import get_group_by_index
+
+                    state = load_state()
                     target = get_group_by_index(state, int(arg))
                     if target is None:
-                        reply = "❌ 序号不存在，用 /status 查看列表"
-                        url = f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
-                        await send_reply(url, reply, msg_id)
+                        await send_text(
+                            "",
+                            user_id,
+                            "❌ 序号不存在，用 /status 查看列表",
+                            msg_id,
+                            is_group=False,
+                        )
                         return
                 else:
                     target = arg
-                if content.startswith("/latex "):
-                    from utils.commands import handle_latex
-
-                    return
-                await handle_latex(
-                    group_id, user_id, clean_content, msg_id, is_group=True
-                )
             reply = await dispatch_command(cmd, user_id, target)
         else:
             reply = await handle_chat(content, user_id=user_id, group_id="")
 
-        url = f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
-        await send_reply(url, reply, msg_id)
-
-        # 记录 Bot 自己的回复
-        record_message("", user_id, "bot", reply)
+        await send_text("", user_id, reply, msg_id, is_group=False)
 
     # ---------- 群聊 @ ----------
     elif event == "GROUP_AT_MESSAGE_CREATE":
@@ -162,52 +109,36 @@ async def process_event(data: dict):
         content = d.get("content", "").strip()
         msg_id = d["id"]
 
-        # 去掉 @<id> 前缀
-        if content.startswith("<@"):
-            end_idx = content.find(">")
-            if end_idx != -1:
-                mentioned_id = content[2:end_idx]
-                if mentioned_id == BOT_OPENID:
-                    clean_content = content[end_idx + 1 :].strip()
-                else:
-                    clean_content = content
-            else:
-                clean_content = content
-        else:
-            clean_content = content
-
+        clean_content = _extract_at_content(content)
         print(f"[群聊@] {group_id}: {clean_content}")
 
-        # 记录群
+        state = load_state()
         if group_id not in state["groups"]:
-            state["groups"][group_id] = None
-            save_state(state)
+            set_group_state(state, group_id, None)
 
-        # 检查开关
         if not is_group_enabled(state, group_id):
-            url = f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
-            await send_reply(url, "⏸️ 当前群 Bot 未开启", msg_id)
+            await send_text(
+                group_id, user_id, "⏸️ 当前群 Bot 未开启", msg_id, is_group=True
+            )
             return
 
-        # 记录用户消息
-        record_message(group_id, user_id, "user", clean_content)
-        check_and_update_scene(group_id, user_id, "user", clean_content)
+        await record_message(group_id, user_id, "user", clean_content)
+        await check_and_update_scene(group_id, user_id, "user", clean_content)
+
+        if clean_content.startswith("/latex "):
+            await handle_latex(group_id, user_id, clean_content, msg_id, is_group=True)
+            return
 
         if clean_content.startswith("/"):
-            if clean_content.startswith("/latex "):
-                from utils.commands import handle_latex
-
-                await handle_latex(
-                    group_id, user_id, clean_content, msg_id, is_group=True
-                )
-
             parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
             reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
-        await send_text(group_id, user_id, reply, msg_id, send_reply, is_group=True)
+        await send_text(group_id, user_id, reply, msg_id, is_group=True)
+        await check_and_update_scene(group_id, user_id, "bot", reply)
+
     # ---------- 群聊免@ ----------
     elif event == "GROUP_MESSAGE_CREATE":
         group_id = d["group_openid"]
@@ -215,72 +146,58 @@ async def process_event(data: dict):
         content = d.get("content", "").strip()
         msg_id = d["id"]
 
-        # 记录群
-        if group_id not in state["groups"]:
-            state["groups"][group_id] = None
-            save_state(state)
+        is_at_bot, clean_content = _detect_at_bot(content)
 
-        # 检查开关
+        state = load_state()
+        if group_id not in state["groups"]:
+            set_group_state(state, group_id, None)
+
         if not is_group_enabled(state, group_id):
             return
 
-        # 判断是否是 @Bot
-        is_at_bot = False
-        clean_content = content
+        msg_to_record = clean_content if is_at_bot else content
+        await record_message(group_id, user_id, "user", msg_to_record)
+        await check_and_update_scene(group_id, user_id, "user", msg_to_record)
 
-        if content.startswith("<@"):
-            end_idx = content.find(">")
-            if end_idx != -1:
-                mentioned_id = content[2:end_idx]
-                if mentioned_id == BOT_OPENID:
-                    is_at_bot = True
-                    clean_content = content[end_idx + 1 :].strip()
-
-        # 所有消息都 push 进记忆
-        record_message(
-            group_id, user_id, "user", clean_content if is_at_bot else content
-        )
-        check_and_update_scene(
-            group_id, user_id, "user", clean_content if is_at_bot else content
-        )
-
-        # 决定是否回答
         if not is_at_bot:
             if "yuri" not in content.lower() and "bot" not in content.lower():
                 return
 
         print(f"[群聊{'@' if is_at_bot else '免@'}] {group_id}: {clean_content}")
 
-        # 生成回复
+        if clean_content.startswith("/latex "):
+            await handle_latex(group_id, user_id, clean_content, msg_id, is_group=True)
+            return
+
         if clean_content.startswith("/"):
-            if clean_content.startswith("/latex "):
-                from utils.commands import handle_latex
-
-                await handle_latex(
-                    group_id, user_id, clean_content, msg_id, is_group=True
-                )
-                return
-
             parts = clean_content.split()
             cmd = parts[0][1:]
             reply = await dispatch_command(cmd, user_id)
         else:
             reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
 
-        await send_text(group_id, user_id, reply, msg_id, send_reply, is_group=True)
-        check_and_update_scene(group_id, user_id, "bot", reply)
+        await send_text(group_id, user_id, reply, msg_id, is_group=True)
+        await check_and_update_scene(group_id, user_id, "bot", reply)
 
 
-# ========== Webhook 签名验证 ==========
-def generate_signature(event_ts: str, plain_token: str) -> str:
-    seed = APP_SECRET.encode("utf-8")
-    while len(seed) < 32:
-        seed += seed
-    seed = seed[:32]
-    private_key = Ed25519PrivateKey.from_private_bytes(seed)
-    message = (event_ts + plain_token).encode("utf-8")
-    signature = private_key.sign(message)
-    return signature.hex()
+def _extract_at_content(content: str) -> str:
+    if content.startswith("<@"):
+        end_idx = content.find(">")
+        if end_idx != -1:
+            mentioned_id = content[2:end_idx]
+            if mentioned_id == BOT_OPENID:
+                return content[end_idx + 1 :].strip()
+    return content
+
+
+def _detect_at_bot(content: str):
+    if content.startswith("<@"):
+        end_idx = content.find(">")
+        if end_idx != -1:
+            mentioned_id = content[2:end_idx]
+            if mentioned_id == BOT_OPENID:
+                return True, content[end_idx + 1 :].strip()
+    return False, content
 
 
 @app.post("/callback")
@@ -299,7 +216,7 @@ async def callback(request: Request):
         return {"plain_token": plain_token, "signature": signature}
 
     if op == 0:
-        # 用 create_task 不阻塞响应，但加异常捕获
+
         async def safe_process(data):
             try:
                 await process_event(data)
@@ -330,8 +247,8 @@ async def token_refresh_loop():
 
 @app.on_event("startup")
 async def startup():
-    init_db()  # 初始化数据库
-    init_scenes_table()
+    await init_db()
+    await init_scenes_table()
     asyncio.create_task(token_refresh_loop())
 
 
