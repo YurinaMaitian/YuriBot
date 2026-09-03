@@ -29,6 +29,11 @@ def get_help() -> str:
     return "\n".join(lines)
 
 
+def get_cmd_list() -> str:
+    """返回紧凑指令列表，如：/on /off /status /latex"""
+    return " ".join([f"/{k}" for k in _registry.keys()])
+
+
 def auto_discover(package: str = "tools"):
     """自动扫描包内所有模块，触发装饰器注册"""
     try:

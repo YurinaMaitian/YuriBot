@@ -1,12 +1,14 @@
 import asyncio
 import json
 import uvicorn
+import handlers.admin  # 触发 @cmd 注册
+import tools.latex  # 触发 @cmd 注册
 from fastapi import FastAPI, Request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from config import APP_ID, APP_SECRET, BOT_OPENID
 from handlers.chat import handle_chat
-from core.registry import get_handler, get_help, auto_discover
+from core.registry import get_handler, get_help, auto_discover, get_cmd_list
 from core.context import CmdContext
 from core.memory import record_message
 from services.db import init_db
@@ -79,7 +81,7 @@ async def process_event(data: dict):
 
             handler = get_handler(cmd_name)
             if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
                 await send_text("", user_id, reply, msg_id, is_group=False)
                 return
 
@@ -133,7 +135,7 @@ async def process_event(data: dict):
 
             handler = get_handler(cmd_name)
             if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
                 await send_text(group_id, user_id, reply, msg_id, is_group=True)
                 return
 
@@ -186,7 +188,7 @@ async def process_event(data: dict):
 
             handler = get_handler(cmd_name)
             if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}\n{get_help()}"
+                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
                 await send_text(group_id, user_id, reply, msg_id, is_group=True)
                 return
 
