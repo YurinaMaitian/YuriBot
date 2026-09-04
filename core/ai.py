@@ -2,7 +2,21 @@ import asyncio
 import os
 import json
 import aiohttp
-from config import DEEPSEEK_API_KEY, DEEPSEEK_URL, APP_ID, APP_SECRET, TOKEN_URL
+from config import (
+    MAIN_MODEL_URL,
+    MAIN_MODEL_KEY,
+    MAIN_MODEL_NAME,
+    MAIN_MODEL_MAX_TOKENS,
+    MAIN_MODEL_TEMP,
+    LIGHT_MODEL_URL,
+    LIGHT_MODEL_KEY,
+    LIGHT_MODEL_NAME,
+    LIGHT_MODEL_MAX_TOKENS,
+    LIGHT_MODEL_TEMP,
+    APP_ID,
+    APP_SECRET,
+    TOKEN_URL,
+)
 from core.memory import build_prompt
 
 PERSONA_DIR = "/home/minds/qqbot/data/persona"
@@ -57,12 +71,32 @@ async def get_ai_reply(
     user_id: str = "",
     group_id: str = "",
     system_override: str = None,
-    max_tokens: int = 120,
+    max_tokens: int = None,
+    temperature: float = None,
+    model: str = None,
+    api_url: str = None,
+    api_key: str = None,
     use_flash: bool = False,
-    temperature: float = 0.8,
 ) -> str:
+    """
+    统一 AI 调用入口。
+    不传 model/api_url/api_key 时，默认使用主模型（DeepSeek）。
+    传了则使用指定模型（如硅基流动的 Qwen3.5-4B）。
+    """
     if not user_message or not user_message.strip():
         return "……（没听见）"
+
+    # 默认主模型
+    if model is None:
+        model = MAIN_MODEL_NAME
+    if api_url is None:
+        api_url = MAIN_MODEL_URL
+    if api_key is None:
+        api_key = MAIN_MODEL_KEY
+    if max_tokens is None:
+        max_tokens = MAIN_MODEL_MAX_TOKENS
+    if temperature is None:
+        temperature = MAIN_MODEL_TEMP
 
     if system_override is None:
         full_prompt = await build_prompt(group_id, user_id, user_message)
@@ -70,12 +104,8 @@ async def get_ai_reply(
         full_prompt = user_message
 
     system = system_override or SYSTEM_PROMPT
-    model = "deepseek-v4-flash" if use_flash else "deepseek-chat"
 
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": model,
         "messages": [
@@ -90,7 +120,7 @@ async def get_ai_reply(
         async with aiohttp.ClientSession() as session:
             for attempt in range(2):
                 async with session.post(
-                    DEEPSEEK_URL, headers=headers, json=payload, timeout=15
+                    api_url, headers=headers, json=payload, timeout=15
                 ) as r:
                     raw_text = await r.text()
                     print(

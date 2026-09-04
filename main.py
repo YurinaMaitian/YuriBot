@@ -4,6 +4,7 @@ import uvicorn
 import handlers.admin
 import handlers.chat
 import handlers.owner
+from services.vector_store import init_collection
 import tools.latex
 from fastapi import FastAPI, Request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -286,6 +287,12 @@ async def token_refresh_loop():
 async def startup():
     await init_db()
     await init_scenes_table()
+
+    try:
+        await init_collection()
+    except Exception as e:
+        print(f"[启动] Qdrant 初始化失败（将降级到 SQLite）: {e}")
+
     auto_discover("tools")
     auto_discover("handlers")
     asyncio.create_task(token_refresh_loop())

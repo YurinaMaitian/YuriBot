@@ -94,6 +94,39 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
             for p in prefs:
                 lines.append(f"  - {p}")
 
+    # ========== 新增：语义检索情景记忆 ==========
+    if plan.get("scene") and group_id:
+        from services.embedding import embed_text
+        from services.vector_store import search_scenes
+
+        try:
+            query_vector = await embed_text(current_msg)
+            scenes = await search_scenes(group_id, query_vector, top_k=3)
+            if scenes:
+                lines.append("【之前聊过】")
+                for s in scenes:
+                    lines.append(f"  - {s['summary']}")
+        except Exception as e:
+            print(f"[情景检索失败] {e}")
+            # 降级：直接查 SQLite 最近3条
+            import aiosqlite
+            from services.db import DB_PATH
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute(
+                    """
+                    SELECT summary FROM scenes 
+                    WHERE group_id = ? ORDER BY end_time DESC LIMIT 3
+                """,
+                    (group_id,),
+                ) as cur:
+                    rows = await cur.fetchall()
+                if rows:
+                    lines.append("【之前聊过】")
+                    for r in rows:
+                        lines.append(f"  - {r[0]}")
+
+    # 短期上下文（始终加载）
     ctx = get_context(group_id, user_id)
     if ctx:
         history_lines = [f"{m['identity']}：{m['content']}" for m in ctx]
