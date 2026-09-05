@@ -1,8 +1,15 @@
 import json
 import base64
 import aiohttp
-import re
-from config import LIGHT_MODEL_URL, LIGHT_MODEL_KEY, LIGHT_MODEL_NAME
+
+# import 换成
+from config import (
+    VISION_MODEL_URL,
+    VISION_MODEL_KEY,
+    VISION_MODEL_NAME,
+    VISION_MODEL_MAX_TOKENS,
+    VISION_MODEL_TEMP,
+)
 from services.image_cache import get_cached_desc, set_cached_desc
 
 
@@ -51,11 +58,11 @@ async def describe_image(
             prompt_text = "一句话描述这张图片的内容"
 
         headers = {
-            "Authorization": f"Bearer {LIGHT_MODEL_KEY}",
+            "Authorization": f"Bearer {VISION_MODEL_KEY}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": LIGHT_MODEL_NAME,
+            "model": VISION_MODEL_NAME,
             "messages": [
                 {
                     "role": "user",
@@ -68,13 +75,14 @@ async def describe_image(
                     ],
                 }
             ],
-            "max_tokens": 10000,  # 推理模型需要大量空间
-            "temperature": 0.3,
+            "max_tokens": VISION_MODEL_MAX_TOKENS,
+            "temperature": VISION_MODEL_TEMP,
+            "enable_thinking": False,  # 关键：关掉推理，content 直接可用
         }
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                LIGHT_MODEL_URL, headers=headers, json=payload, timeout=20
+                VISION_MODEL_URL, headers=headers, json=payload, timeout=20
             ) as r:
                 raw = await r.text()
                 print(f"[Vision API原始返回] {raw[:800]}")
@@ -83,21 +91,11 @@ async def describe_image(
                     return "一张图片"
 
                 data = json.loads(raw)
-                choice = data["choices"][0]
-                msg = choice.get("message", {})
+                msg = data["choices"][0].get("message", {})
 
-                # 优先取 content
-                desc = msg.get("content", "").strip()
-
-                # 如果 content 为空，从 reasoning 提取
+                desc = (msg.get("content") or "").strip()
                 if not desc:
-                    reasoning = msg.get("reasoning_content", "").strip()
-                    if reasoning:
-                        desc = _extract_from_reasoning(reasoning)
-                        print(f"[Vision] 从 reasoning 提取: {desc[:50]}")
-                    else:
-                        desc = "一张图片"
-
+                    desc = "一张图片"
                 # 截断
                 if len(desc) > 100:
                     desc = desc[:100]
@@ -109,57 +107,3 @@ async def describe_image(
     except Exception as e:
         print(f"[Vision异常] {e}")
         return "一张图片"
-
-
-def _extract_from_reasoning(reasoning: str) -> str:
-    """
-    从思维链末尾提取最终结论。
-    推理模型通常把结论写在最后，前面都是分析过程。
-    """
-    lines = [l.strip() for l in reasoning.split("\n") if l.strip()]
-
-    # 跳过词：分析过程中的元信息
-    skip = [
-        "方案",
-        "草拟",
-        "尝试",
-        "分析",
-        "Process",
-        "思考",
-        "步骤",
-        "提炼",
-        "观察",
-        "总结",
-        "评估",
-        "计划",
-        "策略",
-        "优化",
-        "精简",
-        "确认",
-    ]
-
-    # 从后往前找，找最长的一句实质性内容
-    candidates = []
-    for line in reversed(lines):
-        clean = re.sub(r"\*\*|\*|#|`", "", line).strip()
-
-        # 跳过纯编号
-        if re.match(r"^\d+\.\s*$", clean) or re.match(r"^\d+\.\s*\*\*", clean):
-            continue
-        # 跳过含元信息关键词的
-        if any(k in clean for k in skip):
-            continue
-        # 跳过过短（可能是半截）或过长
-        if len(clean) < 8:
-            continue
-
-        candidates.append(clean)
-        if len(candidates) >= 3:  # 收集最后 3 句候选
-            break
-
-    if not candidates:
-        return "一张图片"
-
-    # 选最长的一句（通常是最完整的结论）
-    best = max(candidates, key=len)
-    return best

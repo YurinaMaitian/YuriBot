@@ -46,63 +46,26 @@ async def _generate_summary(msgs):
 记录："""
 
     from core.ai import get_ai_reply
-    from config import (
-        LIGHT_MODEL_NAME,
-        LIGHT_MODEL_URL,
-        LIGHT_MODEL_KEY,
-        LIGHT_MODEL_MAX_TOKENS,
-        LIGHT_MODEL_TEMP,
-    )
+    from config import LIGHT_MODEL_NAME, LIGHT_MODEL_URL, LIGHT_MODEL_KEY
 
-    # 摘要也用 Qwen3.5-4B（免费），但加大 token 确保思维链完整
     summary = await get_ai_reply(
         user_message=prompt,
         system_override="你是一位客观的会议记录员。只写结论，不要分析过程。",
-        max_tokens=2000,  # 加大，确保思维链 + 结论都能写完
+        max_tokens=200,
         temperature=0.1,
         model=LIGHT_MODEL_NAME,
         api_url=LIGHT_MODEL_URL,
         api_key=LIGHT_MODEL_KEY,
     )
 
-    # 二次过滤：如果仍然被思维链污染，截断
-    markers = [
-        "Thinking Process",
-        "1. **Analyze",
-        "2. **Observe",
-        "分析用户请求",
-        "思考过程",
-    ]
-    for marker in markers:
-        idx = summary.find(marker)
-        if idx != -1:
-            summary = summary[:idx].strip()
-            break
-
-    summary = summary.replace("\n", " ").replace("  ", " ").strip()
-
-    # 如果过滤后为空或太短，兜底
-    if not summary or len(summary) < 5:
+    # 失败兜底（AI服务异常时 get_ai_reply 会返回人设化占位句）
+    if not summary or "没听见" in summary or "开小差" in summary:
         summary = "群友聊天"
 
+    summary = summary.replace("\n", " ").strip()
     if len(summary) > 50:
         summary = summary[:50]
-
     return summary
-
-
-async def _do_close_scene(group_id: str, scene: dict):
-    """真正关闭场景并入库（接收场景对象，不从全局字典取）"""
-    if not scene or not scene.get("messages"):
-        return
-
-    msgs = scene["messages"]
-    if len(msgs) < 2:
-        print(f"[情景丢弃] 群:{group_id[:8]}, 条数:{len(msgs)}, 内容太少不生成摘要")
-        return
-
-    summary = await _generate_summary(msgs)
-    participants = list(set(m["user_id"] for m in msgs if m["speaker"] == "user"))
 
 
 async def _do_close_scene(group_id: str, scene: dict):

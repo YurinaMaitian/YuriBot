@@ -24,8 +24,8 @@ MAIN_MODEL_TEMP = float(os.getenv("MAIN_MODEL_TEMP", "0.8"))
 LIGHT_MODEL_URL = os.getenv("LIGHT_MODEL_URL", "")
 LIGHT_MODEL_KEY = os.getenv("LIGHT_MODEL_KEY", "")
 LIGHT_MODEL_NAME = os.getenv("LIGHT_MODEL_NAME", "")
-LIGHT_MODEL_MAX_TOKENS = int(os.getenv("LIGHT_MODEL_MAX_TOKENS", "100"))
-LIGHT_MODEL_TEMP = float(os.getenv("LIGHT_MODEL_TEMP", "0.1"))
+LIGHT_MODEL_MAX_TOKENS = int(os.getenv("LIGHT_MODEL_MAX_TOKENS", "1000"))
+LIGHT_MODEL_TEMP = float(os.getenv("LIGHT_MODEL_TEMP", "0.3"))
 
 # ========== 嵌入模型 ==========
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "")
@@ -36,3 +36,10 @@ EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 # ========== Qdrant ==========
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = "scenes"
+
+# ========== Vision 模型（多模态，关思考） ==========
+VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", LIGHT_MODEL_URL)
+VISION_MODEL_KEY = os.getenv("VISION_MODEL_KEY", LIGHT_MODEL_KEY)
+VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen/Qwen3.5-4B")
+VISION_MODEL_MAX_TOKENS = int(os.getenv("VISION_MODEL_MAX_TOKENS", "300"))
+VISION_MODEL_TEMP = float(os.getenv("VISION_MODEL_TEMP", "0.3"))
