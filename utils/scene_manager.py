@@ -37,8 +37,12 @@ async def _generate_summary(msgs):
     if not msgs:
         return "无内容"
 
-    prompt = f"""用第三人称客观记录这段群聊（40字内，不带情绪，像会议纪要）：
+    prompt = f"""用第三人称客观记录这段群聊（40字内，不带情绪，像会议纪要）。
+直接写结论，不要分析过程。
+
+对话：
 {_format_messages_for_summary(msgs)}
+
 记录："""
 
     from core.ai import get_ai_reply
@@ -50,19 +54,40 @@ async def _generate_summary(msgs):
         LIGHT_MODEL_TEMP,
     )
 
+    # 摘要也用 Qwen3.5-4B（免费），但加大 token 确保思维链完整
     summary = await get_ai_reply(
         user_message=prompt,
-        system_override="你是一位客观的会议记录员，只陈述事实，不带任何情绪或主观评价。",
-        max_tokens=LIGHT_MODEL_MAX_TOKENS,
-        temperature=LIGHT_MODEL_TEMP,
+        system_override="你是一位客观的会议记录员。只写结论，不要分析过程。",
+        max_tokens=2000,  # 加大，确保思维链 + 结论都能写完
+        temperature=0.1,
         model=LIGHT_MODEL_NAME,
         api_url=LIGHT_MODEL_URL,
         api_key=LIGHT_MODEL_KEY,
     )
 
+    # 二次过滤：如果仍然被思维链污染，截断
+    markers = [
+        "Thinking Process",
+        "1. **Analyze",
+        "2. **Observe",
+        "分析用户请求",
+        "思考过程",
+    ]
+    for marker in markers:
+        idx = summary.find(marker)
+        if idx != -1:
+            summary = summary[:idx].strip()
+            break
+
     summary = summary.replace("\n", " ").replace("  ", " ").strip()
+
+    # 如果过滤后为空或太短，兜底
+    if not summary or len(summary) < 5:
+        summary = "群友聊天"
+
     if len(summary) > 50:
         summary = summary[:50]
+
     return summary
 
 

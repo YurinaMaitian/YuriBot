@@ -1,5 +1,6 @@
 import aiosqlite
 from collections import deque
+from datetime import datetime
 from typing import List
 from services.db import save_message, DB_PATH
 
@@ -12,6 +13,24 @@ def _get_key(group_id: str, user_id: str) -> str:
     return group_id
 
 
+def _format_rel_time(msg_time: datetime) -> str:
+    """计算相对时间，如 [刚刚]、[几分钟前]"""
+    if not msg_time:
+        return ""
+    delta = (datetime.now() - msg_time).total_seconds()
+    if delta < 60:
+        return "[刚刚] "
+    elif delta < 300:
+        return "[几分钟前] "
+    elif delta < 900:
+        return "[刚才] "
+    elif delta < 3600:
+        return "[半小时前] "
+    elif delta < 7200:
+        return "[一小时前] "
+    return ""
+
+
 async def _lazy_load(key: str, group_id: str, user_id: str):
     from services.user_manager import get_nickname
 
@@ -19,7 +38,7 @@ async def _lazy_load(key: str, group_id: str, user_id: str):
         if group_id:
             async with db.execute(
                 """
-                SELECT speaker, speaker_id, content FROM messages
+                SELECT speaker, speaker_id, content, created_at FROM messages
                 WHERE group_id = ? ORDER BY created_at DESC LIMIT 20
             """,
                 (group_id,),
@@ -28,7 +47,7 @@ async def _lazy_load(key: str, group_id: str, user_id: str):
         else:
             async with db.execute(
                 """
-                SELECT speaker, speaker_id, content FROM messages
+                SELECT speaker, speaker_id, content, created_at FROM messages
                 WHERE group_id = '' AND (speaker_id = ? OR speaker_id = 'yuribot')
                 ORDER BY created_at DESC LIMIT 20
             """,
@@ -38,13 +57,26 @@ async def _lazy_load(key: str, group_id: str, user_id: str):
 
     if rows:
         _hot_cache[key] = deque(maxlen=50)
-        for speaker, speaker_id, content in reversed(rows):
+        for speaker, speaker_id, content, created_at in reversed(rows):
             if speaker == "bot":
                 identity = "YuriBot"
             else:
                 identity = await get_nickname(speaker_id)
+
+            msg_time = None
+            if created_at:
+                try:
+                    msg_time = datetime.fromisoformat(created_at)
+                except:
+                    msg_time = datetime.now()
+
             _hot_cache[key].append(
-                {"speaker": speaker, "identity": identity, "content": content[:200]}
+                {
+                    "speaker": speaker,
+                    "identity": identity,
+                    "content": content[:200],
+                    "time": msg_time,
+                }
             )
         print(f"[缓存恢复] key={key[:20]}, 恢复{len(rows)}条")
 
@@ -60,7 +92,12 @@ async def record_message(group_id: str, user_id: str, speaker: str, content: str
 
     identity = "YuriBot" if speaker == "bot" else await get_nickname(user_id)
     _hot_cache[key].append(
-        {"speaker": speaker, "identity": identity, "content": content[:200]}
+        {
+            "speaker": speaker,
+            "identity": identity,
+            "content": content[:200],
+            "time": datetime.now(),
+        }
     )
 
     db_speaker_id = "yuribot" if speaker == "bot" else user_id
@@ -94,7 +131,6 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
             for p in prefs:
                 lines.append(f"  - {p}")
 
-    # ========== 新增：语义检索情景记忆 ==========
     if plan.get("scene") and group_id:
         from services.embedding import embed_text
         from services.vector_store import search_scenes
@@ -108,7 +144,6 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
                     lines.append(f"  - {s['summary']}")
         except Exception as e:
             print(f"[情景检索失败] {e}")
-            # 降级：直接查 SQLite 最近3条
             import aiosqlite
             from services.db import DB_PATH
 
@@ -126,10 +161,13 @@ async def build_prompt(group_id: str, user_id: str, current_msg: str) -> str:
                     for r in rows:
                         lines.append(f"  - {r[0]}")
 
-    # 短期上下文（始终加载）
+    # 短期上下文（带相对时间）
     ctx = get_context(group_id, user_id)
     if ctx:
-        history_lines = [f"{m['identity']}：{m['content']}" for m in ctx]
+        history_lines = []
+        for m in ctx:
+            rel = _format_rel_time(m.get("time"))
+            history_lines.append(f"{rel}{m['identity']}：{m['content']}")
         all_text = "\n".join(history_lines)
         if len(all_text) < 600:
             history = all_text

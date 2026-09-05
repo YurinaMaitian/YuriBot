@@ -66,6 +66,71 @@ def load_persona():
 SYSTEM_PROMPT = load_persona()
 
 
+def _extract_final_answer(reasoning: str) -> str:
+    """
+    从推理模型的思维链里提取最终答案。
+    关键：推理模型把最终答案写在思维链末尾，前面都是分析过程。
+    """
+    if not reasoning:
+        return "AI出错了"
+
+    # 去掉开头常见的思维链标题
+    reasoning = re.sub(
+        r"^(Thinking Process:|思考过程：|分析过程：)\s*",
+        "",
+        reasoning,
+        flags=re.IGNORECASE,
+    )
+
+    # 按段落分割（双换行通常是段落分隔）
+    paragraphs = [p.strip() for p in reasoning.split("\n\n") if p.strip()]
+
+    # 从后往前找，找第一个"像最终答案"的段落
+    skip_keywords = [
+        "分析",
+        "思考",
+        "Process",
+        "观察",
+        "步骤",
+        "方案",
+        "草拟",
+        "尝试",
+        "评估",
+        "计划",
+        "优化",
+        "确认",
+        "总结",
+        "提炼",
+        "Analyze",
+        "Observe",
+        "Evaluate",
+        "Plan",
+        "Step",
+        "Request",
+    ]
+
+    for para in reversed(paragraphs):
+        clean = re.sub(r"\*\*|\*|#|`", "", para).strip()
+
+        # 跳过纯编号段落（如 "1. **分析**"）
+        if re.match(r"^\d+\.\s*\*\*", clean):
+            continue
+        # 跳过含元信息关键词的
+        if any(k in clean for k in skip_keywords):
+            continue
+        # 跳过过短
+        if len(clean) < 10:
+            continue
+
+        return clean
+
+    # 兜底：取最后一段，清理 markdown
+    if paragraphs:
+        return re.sub(r"\*\*|\*|#|`", "", paragraphs[-1]).strip()
+
+    return "AI出错了"
+
+
 async def get_ai_reply(
     user_message: str,
     user_id: str = "",
@@ -135,7 +200,37 @@ async def get_ai_reply(
                         return "AI服务开小差了，稍后再试"
 
                     data = json.loads(raw_text)
-                    reply = data["choices"][0]["message"]["content"].strip()
+                    choice = data["choices"][0]
+                    msg = choice.get("message", {})
+                    reply = msg.get("content", "").strip()
+
+                    # 兜底：推理模型可能 content 为空
+                    if not reply:
+                        reasoning = msg.get("reasoning_content", "").strip()
+                        if reasoning:
+                            # 找 reasoning 里最后一行有实质内容的（非编号、非元信息）
+                            lines = [
+                                l.strip() for l in reasoning.split("\n") if l.strip()
+                            ]
+                            for line in reversed(lines):
+                                if line.startswith(
+                                    ("1.", "2.", "3.", "4.", "5.", "*", "-", "**")
+                                ):
+                                    continue
+                                if any(
+                                    k in line
+                                    for k in ["分析", "思考", "Process", "方案", "草拟"]
+                                ):
+                                    continue
+                                if len(line) > 3:
+                                    reply = line[:100]
+                                    break
+                            # 兜底：推理模型可能 content 为空
+                            if not reply:
+                                reasoning = msg.get("reasoning_content", "").strip()
+                                if reasoning:
+                                    reply = _extract_final_answer(reasoning)
+                                    print(f"[AI] 从 reasoning 提取: {reply[:50]}")
 
                     if reply:
                         return reply
