@@ -76,15 +76,17 @@ async def get_ai_reply(
     model: str = None,
     api_url: str = None,
     api_key: str = None,
-    use_flash: bool = False,
+    prompt_override: str = None,
+    timeout: int = 15,
+    enable_thinking: bool = None,
 ) -> str:
     """
     统一 AI 调用入口。
     不传 model/api_url/api_key 时，默认使用主模型（DeepSeek）。
     传了则使用指定模型（如硅基流动的 Qwen3.5-4B）。
     """
-    if not user_message or not user_message.strip():
-        return "……（没听见）"
+    # if not user_message or not user_message.strip():
+    #     return "……（没听见）"
 
     # 默认主模型
     if model is None:
@@ -98,7 +100,9 @@ async def get_ai_reply(
     if temperature is None:
         temperature = MAIN_MODEL_TEMP
 
-    if system_override is None:
+    if prompt_override is not None:
+        full_prompt = prompt_override
+    elif system_override is None:
         full_prompt = await build_prompt(group_id, user_id, user_message)
     else:
         full_prompt = user_message
@@ -116,33 +120,49 @@ async def get_ai_reply(
         "temperature": temperature,
     }
 
+    if enable_thinking is not None:
+        payload["enable_thinking"] = enable_thinking
+
     try:
         async with aiohttp.ClientSession() as session:
             for attempt in range(2):
-                async with session.post(
-                    api_url, headers=headers, json=payload, timeout=15
-                ) as r:
-                    raw_text = await r.text()
-                    print(
-                        f"[AI原始返回] 模型:{model}, 状态:{r.status}, 尝试:{attempt + 1}"
-                    )
+                try:
+                    async with session.post(
+                        api_url, headers=headers, json=payload, timeout=timeout
+                    ) as r:
+                        raw_text = await r.text()
+                        print(
+                            f"[AI原始返回] 模型:{model}, 状态:{r.status}, 尝试:{attempt + 1}"
+                        )
 
-                    if r.status != 200:
-                        print(f"[AI API错误] {raw_text[:200]}")
-                        if attempt == 0:
-                            await asyncio.sleep(0.5)
-                            continue
-                        return "AI服务开小差了，稍后再试"
+                        if r.status != 200:
+                            print(f"[AI API错误] {raw_text[:200]}")
+                            if attempt == 0:
+                                await asyncio.sleep(0.5)
+                                continue
+                            return "AI服务开小差了，稍后再试"
 
-                    data = json.loads(raw_text)
-                    msg = data["choices"][0].get("message", {})
-                    reply = (msg.get("content") or "").strip()
+                        data = json.loads(raw_text)
+                        choice = data["choices"][0]
+                        msg = choice.get("message", {})
+                        reply = (msg.get("content") or "").strip()
+                        print(
+                            f"[AI] finish_reason={choice.get('finish_reason')}, 长度={len(reply)}"
+                        )
 
-                    if reply:
-                        return reply
+                        if reply:
+                            return reply
 
-                    print("[AI返回空，重试中...]")
-                    await asyncio.sleep(0.5)
+                        print("[AI返回空，重试中...]")
+                        await asyncio.sleep(0.5)
+
+                except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                    # 超时/网络错误也走重试，不再直接穿透
+                    print(f"[AI网络异常] 尝试{attempt + 1}: {type(e).__name__}")
+                    if attempt == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+                    return "AI服务开小差了，稍后再试"
 
             return "……（正在刷手机，没注意看）"
 

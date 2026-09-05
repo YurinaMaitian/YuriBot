@@ -43,3 +43,19 @@ VISION_MODEL_KEY = os.getenv("VISION_MODEL_KEY", LIGHT_MODEL_KEY)
 VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen/Qwen3.5-4B")
 VISION_MODEL_MAX_TOKENS = int(os.getenv("VISION_MODEL_MAX_TOKENS", "300"))
 VISION_MODEL_TEMP = float(os.getenv("VISION_MODEL_TEMP", "0.3"))
+
+
+# ========== 图片等待队列 ==========
+IMAGE_WAIT_TIMEOUT = float(
+    os.getenv("IMAGE_WAIT_TIMEOUT", "10")
+)  # 占位后等 Event 的秒数
+IMAGE_WAIT_MAX = float(
+    os.getenv("IMAGE_WAIT_MAX", "15")
+)  # 图片年龄超过此值，追问时静默丢弃
+IMAGE_FAIL_BLOCK = int(os.getenv("IMAGE_FAIL_BLOCK", "3"))  # 失败几次进 blocked
+ENABLE_IMAGE_PLACEHOLDER = (
+    os.getenv("ENABLE_IMAGE_PLACEHOLDER", "true").lower() == "true"
+)
+IMAGE_ACTION_COOLDOWN = float(
+    os.getenv("IMAGE_ACTION_COOLDOWN", "5")
+)  # 占位动作冷却（秒/群）

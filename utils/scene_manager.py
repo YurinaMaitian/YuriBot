@@ -25,11 +25,14 @@ async def init_scenes_table():
         await db.commit()
 
 
-def _format_messages_for_summary(msgs):
+async def _format_messages_for_summary(msgs):
+    from core.memory import substitute_image_placeholders
+
     lines = []
     for m in msgs:
         speaker = "Bot" if m["speaker"] == "bot" else "用户"
-        lines.append(f"{speaker}: {m['content'][:80]}")
+        content = await substitute_image_placeholders(m["content"][:80])
+        lines.append(f"{speaker}: {content}")
     return "\n".join(lines)
 
 
@@ -41,7 +44,7 @@ async def _generate_summary(msgs):
 直接写结论，不要分析过程。
 
 对话：
-{_format_messages_for_summary(msgs)}
+{await _format_messages_for_summary(msgs)}
 
 记录："""
 
@@ -56,8 +59,8 @@ async def _generate_summary(msgs):
         model=LIGHT_MODEL_NAME,
         api_url=LIGHT_MODEL_URL,
         api_key=LIGHT_MODEL_KEY,
+        enable_thinking=False,  # 同上
     )
-
     # 失败兜底（AI服务异常时 get_ai_reply 会返回人设化占位句）
     if not summary or "没听见" in summary or "开小差" in summary:
         summary = "群友聊天"
@@ -172,6 +175,10 @@ async def check_and_update_scene(
             "start_time": msg_time,
             "user_id": user_id,
         }
+
+    # 元交互不进情景摘要
+    if content.startswith("[动作]") or content.startswith("[指令]"):
+        return closed
 
     _current_scenes[group_id]["messages"].append(
         {"speaker": speaker, "user_id": user_id, "content": content, "time": msg_time}
