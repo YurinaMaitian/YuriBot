@@ -5,8 +5,6 @@ from config import (
     LIGHT_MODEL_NAME,
     LIGHT_MODEL_URL,
     LIGHT_MODEL_KEY,
-    LIGHT_MODEL_MAX_TOKENS,
-    LIGHT_MODEL_TEMP,
 )
 
 ROUTER_SYSTEM = """你是信息调度员。根据用户消息，判断回复前需要检索哪些信息。
@@ -16,7 +14,7 @@ ROUTER_SYSTEM = """你是信息调度员。根据用户消息，判断回复前�
 - preference：Bot 的喜好/雷点（番剧、角色、食物等）
 - scene：情景记忆（之前聊过什么相关话题）
 
-输出严格 JSON，不要解释，不要思考过程：
+输出严格 JSON，不要解释，不要思考过程，不要 markdown 代码块：
 {"time": true/false, "preference": true/false, "scene": true/false}
 
 判断规则：
@@ -27,13 +25,10 @@ ROUTER_SYSTEM = """你是信息调度员。根据用户消息，判断回复前�
 - 普通闲聊 → 可能只需要 time"""
 
 
-from core.registry import cmd
-
-
 def _route_rule(user_msg: str) -> dict:
+    """规则兜底：LLM 不可用或输出无法解析时使用"""
     m = user_msg.lower()
 
-    # scene：追问历史
     if any(
         k in m
         for k in [
@@ -51,7 +46,6 @@ def _route_rule(user_msg: str) -> dict:
     ):
         return {"time": True, "preference": False, "scene": True}
 
-    # preference：喜好/推荐/评价
     if any(
         k in m
         for k in [
@@ -62,21 +56,59 @@ def _route_rule(user_msg: str) -> dict:
             "本命",
             "最爱",
             "讨厌",
-            "雷",
             "你觉得",
             "如何",
             "好吗",
-            "喜欢什么",
         ]
     ):
         return {"time": True, "preference": True, "scene": False}
 
-    # time：默认兜底
     return {"time": True, "preference": False, "scene": False}
 
 
+def _parse_router_json(raw: str) -> dict | None:
+    """从模型输出里抠出 JSON 计划并校验"""
+    if not raw:
+        return None
+    m = re.search(r"\{[^{}]*\}", raw)
+    if not m:
+        return None
+    try:
+        plan = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(plan, dict):
+        return None
+    # 校验字段，缺省补 False，过滤未知键
+    keys = ("time", "preference", "scene")
+    if not any(k in plan for k in keys):
+        return None
+    return {k: bool(plan.get(k, False)) for k in keys}
+
+
 async def route(user_msg: str) -> dict:
-    """判断需要检索哪些模块。纯规则引擎，零成本，100% 稳定。"""
-    result = _route_rule(user_msg)
-    print(f"[Router] 规则命中: {result}, 消息:{user_msg[:30]}")
-    return result
+    """
+    LLM 路由（Qwen3-8B，免费）+ 规则兜底。
+    LLM 调用失败 / 输出非 JSON / 字段异常时，退回纯规则。
+    """
+    try:
+        raw = await get_ai_reply(
+            user_message=user_msg,
+            system_override=ROUTER_SYSTEM,
+            max_tokens=100,
+            temperature=0.0,
+            model=LIGHT_MODEL_NAME,
+            api_url=LIGHT_MODEL_URL,
+            api_key=LIGHT_MODEL_KEY,
+        )
+        plan = _parse_router_json(raw)
+        if plan:
+            print(f"[Router] LLM命中: {plan}, 消息:{user_msg[:30]}")
+            return plan
+        print(f"[Router] LLM输出无法解析: {raw[:80]}")
+    except Exception as e:
+        print(f"[Router] LLM异常: {type(e).__name__}: {e}")
+
+    plan = _route_rule(user_msg)
+    print(f"[Router] 规则兜底: {plan}, 消息:{user_msg[:30]}")
+    return plan
