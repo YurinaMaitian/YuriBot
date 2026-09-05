@@ -28,20 +28,24 @@ async def send_split_message(url: str, content: str, msg_id: str):
     for i, chunk in enumerate(final_chunks, start=1):
         payload = {"content": chunk, "msg_type": 0, "msg_id": msg_id, "msg_seq": i}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as r:
-                resp = await r.json()
+        for attempt in range(2):
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as r:
+                    resp = await r.json()
 
-                if r.status == 401 and "AccessToken无效" in str(resp):
-                    print("[Token] 过期，自动刷新...")
-                    new_token = await refresh_token()
-                    headers["Authorization"] = f"QQBot {new_token}"
-                    async with session.post(url, headers=headers, json=payload) as r2:
-                        print(f"[发送{i}/{len(final_chunks)}] 重试状态:{r2.status}")
-                else:
-                    print(
-                        f"[发送{i}/{len(final_chunks)}] {chunk[:40]}... 状态:{r.status}"
-                    )
+                    if r.status == 401 and "AccessToken无效" in str(resp):
+                        print("[Token] 过期，自动刷新...")
+                        headers["Authorization"] = f"QQBot {await refresh_token()}"
+                        continue  # 用新 token 重试
 
-        if i < len(final_chunks):
-            await asyncio.sleep(0.5)
+                    if r.status in (500, 502, 503):
+                        print(f"[发送{i}] 服务端{r.status}，重试...")
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    if r.status != 200:
+                        print(
+                            f"[发送{i}/{len(final_chunks)}] 失败:{r.status} {str(resp)[:150]}"
+                        )
+
+                    break  # 成功或 4xx 都不重试（4xx 重试无意义）

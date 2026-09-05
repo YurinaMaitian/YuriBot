@@ -5,7 +5,12 @@ from services.media import upload_image, send_image as _send_image_raw
 
 
 async def send_text(
-    group_id: str, user_id: str, content: str, msg_id: str, is_group: bool = True
+    group_id: str,
+    user_id: str,
+    content: str,
+    msg_id: str,
+    is_group: bool = True,
+    memory_tag: str = "",
 ):
     url = (
         f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
@@ -15,7 +20,7 @@ async def send_text(
     await send_split_message(url, content, msg_id)
 
     target_id = group_id if is_group else user_id
-    await record_message(target_id, user_id, "bot", content)
+    await record_message(target_id, user_id, "bot", f"{memory_tag}{content}")
 
 
 async def send_image(

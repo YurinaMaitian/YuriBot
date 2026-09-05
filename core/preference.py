@@ -1,7 +1,7 @@
 import aiosqlite
 import json
 
-DB_PATH = "/home/minds/qqbot/data/bot.db"
+from services.db import DB_PATH
 
 GENERAL_QUERIES = [
     "本命",

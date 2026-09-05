@@ -34,10 +34,12 @@ async def init_db():
         """)
 
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS image_cache (
-                filename TEXT PRIMARY KEY,
-                description TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS bot_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                feeling TEXT NOT NULL,
+                detail TEXT DEFAULT '',
+                keywords TEXT DEFAULT '[]'
             )
         """)
 

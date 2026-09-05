@@ -24,9 +24,11 @@ from utils.scene_manager import check_and_update_scene, init_scenes_table
 from services.vector_store import init_collection
 from core.ai import refresh_token
 from services.actions import send_text
+from collections import deque
 
 # ========== 消息去重（加锁） ==========
 _processed_ids = set()
+_processed_order = deque(maxlen=1000)
 _dedup_lock = asyncio.Lock()
 
 
@@ -34,9 +36,10 @@ async def is_duplicate(msg_id: str) -> bool:
     async with _dedup_lock:
         if msg_id in _processed_ids:
             return True
+        if len(_processed_order) == 1000:
+            _processed_ids.discard(_processed_order[0])
+        _processed_order.append(msg_id)
         _processed_ids.add(msg_id)
-        if len(_processed_ids) > 1000:
-            _processed_ids.clear()
         return False
 
 
@@ -155,19 +158,14 @@ async def process_event(data: dict):
     if event == "C2C_MESSAGE_CREATE":
         user_id = d["author"]["id"]
         content, images = _extract_content_with_attachments(d)
-        msg_id = d["id"]
-
-        # 识别图片
         content = await _process_images(content, images)
 
         nick = await get_nickname(user_id)
         print(f"[私聊] {nick}: {content[:120]}")
 
-        # 记录到记忆（包含图片描述）
-        await record_message("", user_id, "user", content)
-
-        # 命令处理
+        # 命令：打标签进记忆，不进情景（私聊本来就没有情景）
         if content.startswith("/"):
+            await record_message("", user_id, "user", f"[指令] {content}")
             parts = content.split(maxsplit=1)
             cmd_name = parts[0][1:]
             raw = parts[1] if len(parts) > 1 else ""
@@ -176,7 +174,9 @@ async def process_event(data: dict):
             handler = get_handler(cmd_name)
             if not handler:
                 reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text("", user_id, reply, msg_id, is_group=False)
+                await send_text(
+                    "", user_id, reply, msg_id, is_group=False, memory_tag="[指令] "
+                )
                 return
 
             ctx = CmdContext(
@@ -191,10 +191,14 @@ async def process_event(data: dict):
             )
             result = await handler(ctx)
             if isinstance(result, str):
-                await send_text("", user_id, result, msg_id, is_group=False)
+                await send_text(
+                    "", user_id, result, msg_id, is_group=False, memory_tag="[指令] "
+                )
             return
 
-        # AI 聊天
+        # 非命令：进记忆，走 AI
+        await record_message("", user_id, "user", content)
+
         reply = await handle_chat(content, user_id=user_id, group_id="")
         await send_text("", user_id, reply, msg_id, is_group=False)
 
@@ -207,12 +211,10 @@ async def process_event(data: dict):
         # 先去掉 @Bot
         clean_content = _extract_at_content(raw_content)
 
-        # 提取 attachments（从原始消息里取）
+        # 提取 attachments + 图片只解析一次
         clean_content, images = _extract_content_with_attachments(
             {"content": clean_content, "attachments": d.get("attachments", [])}
         )
-
-        # 识别图片
         clean_content = await _process_images(clean_content, images)
 
         nick = await get_nickname(user_id)
@@ -230,12 +232,9 @@ async def process_event(data: dict):
             )
             return
 
-        # 记录记忆 + 更新场景
-        await record_message(group_id, user_id, "user", clean_content)
-        await check_and_update_scene(group_id, user_id, "user", clean_content)
-
-        # 命令处理
+        # 命令：打标签进记忆，不进情景
         if clean_content.startswith("/"):
+            await record_message(group_id, user_id, "user", f"[指令] {clean_content}")
             parts = clean_content.split(maxsplit=1)
             cmd_name = parts[0][1:]
             raw = parts[1] if len(parts) > 1 else ""
@@ -244,7 +243,14 @@ async def process_event(data: dict):
             handler = get_handler(cmd_name)
             if not handler:
                 reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text(group_id, user_id, reply, msg_id, is_group=True)
+                await send_text(
+                    group_id,
+                    user_id,
+                    reply,
+                    msg_id,
+                    is_group=True,
+                    memory_tag="[指令] ",
+                )
                 return
 
             ctx = CmdContext(
@@ -259,10 +265,20 @@ async def process_event(data: dict):
             )
             result = await handler(ctx)
             if isinstance(result, str):
-                await send_text(group_id, user_id, result, msg_id, is_group=True)
-            return
+                await send_text(
+                    group_id,
+                    user_id,
+                    result,
+                    msg_id,
+                    is_group=True,
+                    memory_tag="[指令] ",
+                )
+                return
 
-        # AI 聊天
+        # 非命令：进记忆 + 情景，走 AI
+        await record_message(group_id, user_id, "user", clean_content)
+        await check_and_update_scene(group_id, user_id, "user", clean_content)
+
         reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
         await send_text(group_id, user_id, reply, msg_id, is_group=True)
         await check_and_update_scene(group_id, user_id, "bot", reply)
@@ -280,8 +296,9 @@ async def process_event(data: dict):
             {"content": clean_content, "attachments": d.get("attachments", [])}
         )
 
-        # 识别图片
-        clean_content = await _process_images(clean_content, images)
+        # 图片只解析一次：@Bot 记清理后内容，免@ 记原始内容
+        base_content = clean_content if is_at_bot else raw_content
+        msg_to_record = await _process_images(base_content, images)
 
         # 群状态管理
         state = load_state()
@@ -291,29 +308,22 @@ async def process_event(data: dict):
         if not is_group_enabled(state, group_id):
             return
 
-        # 决定记录什么内容
-        msg_to_record = clean_content if is_at_bot else raw_content
-        # 如果免@ 但带了图片，也要识别后记录
-        if not is_at_bot and images:
-            raw_with_images = await _process_images(raw_content, images)
-            msg_to_record = raw_with_images
-
-        await record_message(group_id, user_id, "user", msg_to_record)
-        await check_and_update_scene(group_id, user_id, "user", msg_to_record)
-
-        # 免@ 触发词过滤
+        # 免@ 触发词过滤（没@ 也没触发词，只记录不回复）
         if not is_at_bot:
             if "yuri" not in raw_content.lower() and "bot" not in raw_content.lower():
+                await record_message(group_id, user_id, "user", msg_to_record)
+                await check_and_update_scene(group_id, user_id, "user", msg_to_record)
                 return
 
         nick = await get_nickname(user_id)
         gname = await get_group_name(group_id)
         print(
-            f"[群聊{'@' if is_at_bot else '免@'}] {gname} | {nick}: {clean_content[:120]}"
+            f"[群聊{'@' if is_at_bot else '免@'}] {gname} | {nick}: {msg_to_record[:120]}"
         )
 
-        # 命令处理
-        if clean_content.startswith("/"):
+        # 命令：打标签进记忆，不进情景
+        if is_at_bot and clean_content.startswith("/"):
+            await record_message(group_id, user_id, "user", f"[指令] {clean_content}")
             parts = clean_content.split(maxsplit=1)
             cmd_name = parts[0][1:]
             raw = parts[1] if len(parts) > 1 else ""
@@ -322,7 +332,14 @@ async def process_event(data: dict):
             handler = get_handler(cmd_name)
             if not handler:
                 reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text(group_id, user_id, reply, msg_id, is_group=True)
+                await send_text(
+                    group_id,
+                    user_id,
+                    reply,
+                    msg_id,
+                    is_group=True,
+                    memory_tag="[指令] ",
+                )
                 return
 
             ctx = CmdContext(
@@ -337,11 +354,25 @@ async def process_event(data: dict):
             )
             result = await handler(ctx)
             if isinstance(result, str):
-                await send_text(group_id, user_id, result, msg_id, is_group=True)
+                await send_text(
+                    group_id,
+                    user_id,
+                    result,
+                    msg_id,
+                    is_group=True,
+                    memory_tag="[指令] ",
+                )
             return
 
-        # AI 聊天
-        reply = await handle_chat(clean_content, user_id=user_id, group_id=group_id)
+        # 非命令：进记忆 + 情景，走 AI
+        await record_message(group_id, user_id, "user", msg_to_record)
+        await check_and_update_scene(group_id, user_id, "user", msg_to_record)
+
+        reply = await handle_chat(
+            msg_to_record if not is_at_bot else clean_content,
+            user_id=user_id,
+            group_id=group_id,
+        )
         await send_text(group_id, user_id, reply, msg_id, is_group=True)
         await check_and_update_scene(group_id, user_id, "bot", reply)
 
