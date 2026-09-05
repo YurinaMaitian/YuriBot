@@ -69,25 +69,46 @@ def generate_signature(event_ts: str, plain_token: str) -> str:
 
 # ========== 内容提取工具 ==========
 def _extract_at_content(content: str) -> str:
-    """去掉 @Bot 前缀"""
-    if content.startswith("<@"):
-        end_idx = content.find(">")
-        if end_idx != -1:
-            mentioned_id = content[2:end_idx]
-            if mentioned_id == BOT_OPENID:
-                return content[end_idx + 1 :].strip()
-    return content
+    """去掉消息里所有 @ 段（群聊@事件里消息以 <@Bot> 开头，可能还@了别人）"""
+    return re.sub(r"<@[^>]*>", "", content).strip()
 
 
 def _detect_at_bot(content: str):
-    """检测是否 @Bot，返回 (是否@, 清理后的内容)"""
-    if content.startswith("<@"):
-        end_idx = content.find(">")
-        if end_idx != -1:
-            mentioned_id = content[2:end_idx]
-            if mentioned_id == BOT_OPENID:
-                return True, content[end_idx + 1 :].strip()
-    return False, content
+    """
+    检测消息中是否 @Bot（任意位置，支持多人同时@）。
+    返回 (是否@Bot, 清理掉所有@段后的内容)
+    """
+    if "<@" not in content:
+        return False, content
+
+    found = False
+    for m in re.finditer(r"<@[^>]*>", content):
+        oid = m.group(0)[2:-1].lstrip("!")
+        if oid == BOT_OPENID:
+            found = True
+    cleaned = re.sub(r"<@[^>]*>", "", content).strip()
+    return found, cleaned
+
+
+def _extract_quote(d: dict) -> tuple[str, list[dict]]:
+    elements = d.get("msg_elements") or []
+    print(
+        f"[quote_debug] elements数={len(elements)}, 各元素类型={[el.get('message_type') for el in elements]}"
+    )
+    quote_text = ""
+    quote_images: list[dict] = []
+    for el in elements:
+        if el.get("message_type") != 103:
+            continue
+        if el.get("content"):
+            quote_text = el["content"]
+        for a in el.get("attachments") or []:
+            if a.get("content_type", "").startswith("image/"):
+                quote_images.append(a)
+    print(
+        f"[quote_debug] quote_text={quote_text[:50]!r}, quote_images={len(quote_images)}个"
+    )
+    return quote_text, quote_images
 
 
 def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
@@ -98,6 +119,11 @@ def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
     """
     content = d.get("content", "").strip()
     attachments = d.get("attachments", [])
+
+    quote_text, quote_images = _extract_quote(d)
+    if quote_text:
+        content = f"【引用的消息】{quote_text}\n{content}".strip()
+    attachments = list(attachments) + quote_images
 
     images = [a for a in attachments if a.get("content_type", "").startswith("image/")]
 
@@ -132,21 +158,19 @@ def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
 
 
 def _has_trigger_word(raw_content: str) -> bool:
-    """触发词判断：先剥掉 URL，再用词边界匹配 bot（qqbot.ugcimg.cn 不误触）"""
+    """触发词判断：先剥 URL 防误触，词边界匹配 bot"""
     text = _URL_RE.sub("", raw_content).lower()
     return "yuri" in text or bool(_TRIGGER_BOT_RE.search(text))
 
 
 def _is_addressed_to_other(raw_content: str) -> bool:
-    """消息以 @别人（非 @Bot）开头 → 定向消息，不触发"""
+    """消息以 @别人（非 @Bot）开头 → 定向消息，不触发。
+    但消息里任何位置 @ 了 Bot 则不算（多人同时@时 Bot 也要接话）"""
     s = raw_content.strip()
-    if s.startswith("[@"):
+    if BOT_OPENID and f"<@{BOT_OPENID}>" in s:
+        return False
+    if s.startswith("[@") or s.startswith("<@"):
         return True
-    if s.startswith("<@"):
-        end = s.find(">")
-        if end != -1:
-            oid = s[2:end].lstrip("!")
-            return oid != BOT_OPENID
     return False
 
 
@@ -200,6 +224,11 @@ async def process_event(data: dict):
         f"[process_event] event={event}, group_id={d.get('group_openid')}, "
         f"user_id={d.get('author', {}).get('member_openid') or d.get('author', {}).get('id')}"
     )
+
+    # print(f"[完整消息体process_event的] {json.dumps(d, ensure_ascii=False)[:2000]}")
+
+    # if d.get("message_reference"):
+    #   print(f"[引用消息] {json.dumps(d['message_reference'], ensure_ascii=False)}")
 
     # ---------- 私聊 ----------
     if event == "C2C_MESSAGE_CREATE":
@@ -358,7 +387,11 @@ async def process_event(data: dict):
 
         # 提取 attachments
         clean_content, images = _extract_content_with_attachments(
-            {"content": clean_content, "attachments": d.get("attachments", [])}
+            {
+                "content": clean_content,
+                "attachments": d.get("attachments", []),
+                "msg_elements": d.get("msg_elements", []),
+            }
         )
 
         # 图片占位（后台解析）：@Bot 记清理后内容，免@ 记原始内容
@@ -373,11 +406,10 @@ async def process_event(data: dict):
         if not is_group_enabled(state, group_id):
             return
 
-        # 免@ 且无触发词 / 定向 @ 别人：只进记忆/情景，不回复
+        # 免@ 静默判断：无触发词且非引用提问 → 只记录不回复
         if not is_at_bot:
-            if _is_addressed_to_other(raw_content) or not _has_trigger_word(
-                raw_content
-            ):
+            triggered = _has_trigger_word(raw_content)
+            if not triggered:
                 await record_message(group_id, user_id, "user", msg_to_record)
                 await check_and_update_scene(group_id, user_id, "user", msg_to_record)
                 return
@@ -431,17 +463,15 @@ async def process_event(data: dict):
                 )
             return
 
-        # 非命令：进记忆 + 情景，走 AI
-        # 非命令：进记忆 + 情景
-        await record_message(group_id, user_id, "user", clean_content)
-        await check_and_update_scene(group_id, user_id, "user", clean_content)
+        # 非命令：进记忆 + 情景，走 AI（用带图片占位的 msg_to_record）
+        await record_message(group_id, user_id, "user", msg_to_record)
+        await check_and_update_scene(group_id, user_id, "user", msg_to_record)
 
-        # 防抖合并：1.5s 内同群新消息会取消本次回复，以最后一条的 msg_id 统一回复
         from core.debounce import schedule
 
         async def _do_reply():
             reply = await handle_chat(
-                clean_content,
+                msg_to_record,
                 user_id=user_id,
                 group_id=group_id,
                 msg_id=msg_id,
