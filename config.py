@@ -45,6 +45,7 @@ VISION_MODEL_MAX_TOKENS = int(os.getenv("VISION_MODEL_MAX_TOKENS", "300"))
 VISION_MODEL_TEMP = float(os.getenv("VISION_MODEL_TEMP", "0.3"))
 
 
+# 图片年龄超过此值，追问时静默丢弃
 # ========== 图片等待队列 ==========
 IMAGE_WAIT_TIMEOUT = float(
     os.getenv("IMAGE_WAIT_TIMEOUT", "10")
@@ -59,3 +60,15 @@ ENABLE_IMAGE_PLACEHOLDER = (
 IMAGE_ACTION_COOLDOWN = float(
     os.getenv("IMAGE_ACTION_COOLDOWN", "5")
 )  # 占位动作冷却（秒/群）
+
+# ========== 短期记忆 ==========
+HISTORY_LOAD_COUNT = int(
+    os.getenv("HISTORY_LOAD_COUNT", "20")
+)  # 重启后从 DB 懒加载条数
+HISTORY_HOT_MAX = int(os.getenv("HISTORY_HOT_MAX", "50"))  # 热缓存环形缓冲上限
+HISTORY_CHAR_BUDGET = int(
+    os.getenv("HISTORY_CHAR_BUDGET", "600")
+)  # 历史文本字符预算，超了截断
+HISTORY_RECENT_LINES = int(
+    os.getenv("HISTORY_RECENT_LINES", "15")
+)  # 超预算后保留最近 N 行

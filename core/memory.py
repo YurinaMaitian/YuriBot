@@ -5,6 +5,12 @@ from datetime import datetime
 from typing import List
 from services.db import save_message, DB_PATH
 from services import image_cache
+from config import (
+    HISTORY_LOAD_COUNT,
+    HISTORY_HOT_MAX,
+    HISTORY_CHAR_BUDGET,
+    HISTORY_RECENT_LINES,
+)
 
 _hot_cache = {}
 
@@ -40,19 +46,19 @@ async def _lazy_load(key: str, group_id: str, user_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         if group_id:
             async with db.execute(
-                "SELECT speaker, speaker_id, content, created_at FROM messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 20",
-                (group_id,),
+                "SELECT speaker, speaker_id, content, created_at FROM messages WHERE group_id = ? ORDER BY created_at DESC LIMIT ?",
+                (group_id, HISTORY_LOAD_COUNT),
             ) as cursor:
                 rows = await cursor.fetchall()
         else:
             async with db.execute(
-                "SELECT speaker, speaker_id, content, created_at FROM messages WHERE group_id = '' AND (speaker_id = ? OR speaker_id = 'yuribot') ORDER BY created_at DESC LIMIT 20",
-                (user_id,),
+                "SELECT speaker, speaker_id, content, created_at FROM messages WHERE group_id = '' AND (speaker_id = ? OR speaker_id = 'yuribot') ORDER BY created_at DESC LIMIT ?",
+                (user_id, HISTORY_LOAD_COUNT),
             ) as cursor:
                 rows = await cursor.fetchall()
 
     if rows:
-        _hot_cache[key] = deque(maxlen=50)
+        _hot_cache[key] = deque(maxlen=HISTORY_HOT_MAX)
         for speaker, speaker_id, content, created_at in reversed(rows):
             identity = "YuriBot" if speaker == "bot" else await get_nickname(speaker_id)
             msg_time = None
@@ -109,9 +115,13 @@ async def get_history_text(group_id: str, user_id: str) -> str:
         rel = _format_rel_time(m.get("time"))
         history_lines.append(f"{rel}{m['identity']}：{m['content']}")
     all_text = "\n".join(history_lines)
-    if len(all_text) < 600:
+    if len(all_text) < HISTORY_CHAR_BUDGET:
         return all_text
-    recent = history_lines[-15:] if len(history_lines) >= 15 else history_lines
+    recent = (
+        history_lines[-HISTORY_RECENT_LINES:]
+        if len(history_lines) >= HISTORY_RECENT_LINES
+        else history_lines
+    )
     return "\n".join(recent)
 
 

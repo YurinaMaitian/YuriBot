@@ -347,7 +347,7 @@ async def process_event(data: dict):
             await send_text(group_id, user_id, reply, msg_id, is_group=True)
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
-        schedule(group_id, _do_reply)  # ---------- 群聊免@ ----------
+        schedule(f"{group_id}:{user_id}", _do_reply)
 
     elif event == "GROUP_MESSAGE_CREATE":
         group_id = d["group_openid"]
@@ -452,7 +452,7 @@ async def process_event(data: dict):
             await send_text(group_id, user_id, reply, msg_id, is_group=True)
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
-        schedule(group_id, _do_reply)
+        schedule(f"{group_id}:{user_id}", _do_reply)
 
 
 # ========== FastAPI 生命周期 ==========
