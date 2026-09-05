@@ -465,6 +465,10 @@ async def lifespan(app: FastAPI):
     auto_discover("tools")
     auto_discover("handlers")
     asyncio.create_task(token_refresh_loop())
+    from utils.scene_manager import scene_scan_loop
+
+    asyncio.create_task(scene_scan_loop())
+
     yield
 
 

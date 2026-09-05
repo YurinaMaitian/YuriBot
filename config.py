@@ -72,3 +72,14 @@ HISTORY_CHAR_BUDGET = int(
 HISTORY_RECENT_LINES = int(
     os.getenv("HISTORY_RECENT_LINES", "15")
 )  # 超预算后保留最近 N 行
+
+
+# ========== 情景记忆（LLM 分割） ==========
+SCENE_MIN_JUDGE = int(os.getenv("SCENE_MIN_JUDGE", "16"))  # 队列多长到值得首次判断
+SCENE_JUDGE_INTERVAL = int(
+    os.getenv("SCENE_JUDGE_INTERVAL", "12")
+)  # 之后每再攒多少条判一次
+SCENE_IDLE_FORCE = int(os.getenv("SCENE_IDLE_FORCE", "600"))  # 静默秒数，强制整队结算
+SCENE_MAX_QUEUE = int(os.getenv("SCENE_MAX_QUEUE", "120"))  # 队列硬顶，超过必须切
+SCENE_MIN_CUT = int(os.getenv("SCENE_MIN_CUT", "4"))  # 最小成段长度
+SCENE_SCAN_INTERVAL = int(os.getenv("SCENE_SCAN_INTERVAL", "30"))  # 后台扫描间隔（秒）
