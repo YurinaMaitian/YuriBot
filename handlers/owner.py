@@ -171,3 +171,35 @@ async def syncpanel_cmd(ctx):
 
     await sync_all_panels()
     return "✅ 面板同步已触发，结果看日志"
+
+
+from services import daily_schedule as daily_sched
+
+
+@cmd("today", desc="[主人] 查看Bot今日日程", hidden=True)
+async def today_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    data = daily_sched.get_today_schedule()
+    if not data:
+        return "今天还没有生成日程（正在回退静态表）。可以用 /reschedule 手动生成。"
+    lines = [f"📅 {data['date']}  心情：{data.get('mood', '?')}"]
+    for ev in data.get("events") or []:
+        lines.append(
+            f"  ⚡{ev['start']:02d}:00-{ev['end']:02d}:00 {ev['desc']}（{ev.get('mood', '')}）"
+        )
+    for b in data.get("blocks", []):
+        note = f"（{b['note']}）" if b.get("note") else ""
+        lines.append(f"  {b['start']:02d}:00-{b['end']:02d}:00 {b['activity']}{note}")
+    return "\n".join(lines)
+
+
+@cmd("reschedule", desc="[主人] 丢弃并重新生成今日日程", hidden=True)
+async def reschedule_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    await daily_sched.reschedule_today()
+    data = daily_sched.get_today_schedule()
+    if not data:
+        return "⚠️ 生成失败，今天回退静态表。稍后再试或看日志。"
+    return f"✅ 已重新生成：心情{data.get('mood', '?')}，{len(data.get('blocks', []))}个时段"

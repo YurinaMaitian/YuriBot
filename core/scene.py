@@ -15,15 +15,56 @@ def load_schedule():
 
 
 def get_current_scene() -> str:
-    """当前时段在干嘛（供主 prompt 的【现在】块引用，文案由 schedule.json 决定）"""
-    schedule = load_schedule()
+    """
+    当前时段她在干嘛。
+    优先级：日程事件 > 日程时段 > 深夜兜底(睡觉) > 静态表 > 闲着。
+    心情不在这里拼，由 build_prompt 读当天 mood 追加。
+    """
     now = datetime.now()
     hour = now.hour
-    weekday = now.weekday()
 
+    from services.daily_schedule import get_today_schedule
+
+    data = get_today_schedule()
+    if data:
+        # 1. 事件优先（覆盖普通时段）
+        for ev in data.get("events") or []:
+            try:
+                if int(ev.get("start", -1)) <= hour < int(ev.get("end", -1)):
+                    desc = str(ev.get("desc", "")).strip()
+                    mood = str(ev.get("mood", "")).strip()
+                    return f"{desc}，{mood}" if mood else desc
+            except (TypeError, ValueError):
+                continue
+        # 2. 普通时段
+        blocks = sorted(
+            data.get("blocks") or [],
+            key=lambda b: (
+                int(b.get("start", 0))
+                if str(b.get("start", "")).lstrip("-").isdigit()
+                else 0
+            ),
+        )
+        for b in blocks:
+            try:
+                s, e = int(b["start"]), int(b["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if s <= hour < e:
+                act = str(b.get("activity", "")).strip()
+                note = str(b.get("note", "")).strip()
+                if act:
+                    return f"{act}，{note}" if note else act
+
+    # 3. 深夜兜底
+    if hour >= 23 or hour < 6:
+        return "睡觉"
+
+    # 4. 静态表回退（旧逻辑，schedule.json 仍在就生效）
+    schedule = load_schedule()
+    weekday = now.weekday()
     day_type = "weekend" if weekday >= 5 else "weekday"
     day_map = schedule.get(day_type, {})
-
     for time_range, desc in day_map.items():
         start, end = map(int, time_range.split("-"))
         if start > end:

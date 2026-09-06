@@ -92,3 +92,10 @@ BILI_COOKIE = os.getenv("BILI_COOKIE", "")  # SESSDATA=...; bili_jct=...; buvid3
 # 换机器或换用户时只需改 .env 里的 DATA_DIR，不再四处改代码。
 DATA_DIR = os.getenv("DATA_DIR", "/home/minds/qqbot/data")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# ========== 主动插话 ==========
+ENABLE_INTERJECT = os.getenv("ENABLE_INTERJECT", "true").lower() == "true"
+INTERJECT_HISTORY_LINES = int(
+    os.getenv("INTERJECT_HISTORY_LINES", "10")
+)  # judge 看到的最近消息条数
+INTERJECT_TEMP = float(os.getenv("INTERJECT_TEMP", "0.2"))

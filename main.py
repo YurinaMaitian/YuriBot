@@ -391,6 +391,8 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(token_refresh_loop())
     asyncio.create_task(scene_scan_loop())
+    from services.daily_schedule import schedule_ensure_loop
+    asyncio.create_task(schedule_ensure_loop())
 
     yield
 

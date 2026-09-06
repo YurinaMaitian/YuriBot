@@ -171,7 +171,15 @@ async def build_prompt(
     lines = []
 
     if plan.get("time"):
-        lines.append(f"【现在】{get_current_scene()}")
+        scene_text = get_current_scene()
+        # 当天心情追加（日程文件提供；无日程则只有活动）
+        from services.daily_schedule import get_today_mood
+
+        mood = get_today_mood()
+        if mood:
+            lines.append(f"【现在】{scene_text}。今天心情{mood}")
+        else:
+            lines.append(f"【现在】{scene_text}")
 
     if plan.get("preference"):
         prefs = await get_relevant_preferences(current_msg)
@@ -179,6 +187,13 @@ async def build_prompt(
             lines.append("【你的喜好】")
             for p in prefs:
                 lines.append(f"  - {p}")
+
+    if plan.get("persona_bg"):
+        from services.persona import load_background
+
+        bg = load_background()
+        if bg:
+            lines.append(f"【你的背景】\n{bg}")
 
     if plan.get("scene") and group_id:
         from services.embedding import embed_text

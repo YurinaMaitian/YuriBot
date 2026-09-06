@@ -60,6 +60,13 @@ def run_self_check() -> list[str]:
     if not os.access(DATA_DIR, os.W_OK):
         problems.append(f"数据目录不可写：{DATA_DIR}")
 
+    from services.persona import load_background
+
+    if not load_background():
+        problems.append(
+            "background.txt 未配置 → 日程生成将按通用人设，persona_bg 注入为空（建议补全）"
+        )
+
     # 汇总输出
     if problems:
         print("=" * 52)
