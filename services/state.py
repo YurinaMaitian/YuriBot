@@ -18,6 +18,11 @@ def load_state():
     return _state_cache
 
 
+def is_reply_at_enabled(state) -> bool:
+    """回@功能开关（被@后回复时@回去）。默认开启"""
+    return bool(state.get("reply_at_enabled", True))
+
+
 def save_state(state):
     global _state_cache
     _state_cache = state

@@ -138,3 +138,26 @@ async def logs_cmd(ctx):
         return "⏱️ 读取日志超时"
     except Exception as e:
         return f"❌ 异常：{e}"
+
+
+from services.state import load_state, save_state
+
+
+@cmd("aton", desc="[主人] 开启回@（被@时回复@回去）")
+async def aton_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    st = load_state()
+    st["reply_at_enabled"] = True
+    save_state(st)
+    return "✅ 回@已开启，群里被@时会@回去"
+
+
+@cmd("atoff", desc="[主人] 关闭回@")
+async def atoff_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    st = load_state()
+    st["reply_at_enabled"] = False
+    save_state(st)
+    return "⏸️ 回@已关闭"

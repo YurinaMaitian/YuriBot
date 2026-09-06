@@ -92,9 +92,9 @@ def _detect_at_bot(content: str):
 
 def _extract_quote(d: dict) -> tuple[str, list[dict]]:
     elements = d.get("msg_elements") or []
-    print(
-        f"[quote_debug] elements数={len(elements)}, 各元素类型={[el.get('message_type') for el in elements]}"
-    )
+    # print(
+    #     f"[quote_debug] elements数={len(elements)}, 各元素类型={[el.get('message_type') for el in elements]}"
+    # )
     quote_text = ""
     quote_images: list[dict] = []
     for el in elements:
@@ -373,7 +373,9 @@ async def process_event(data: dict):
             )
             if reply is None:
                 return
-            await send_text(group_id, user_id, reply, msg_id, is_group=True)
+            await send_text(
+                group_id, user_id, reply, msg_id, is_group=True, at_user=user_id
+            )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
         schedule(f"{group_id}:{user_id}", _do_reply)
@@ -406,7 +408,6 @@ async def process_event(data: dict):
         if not is_group_enabled(state, group_id):
             return
 
-        # 免@ 静默判断：无触发词且非引用提问 → 只记录不回复
         if not is_at_bot:
             triggered = _has_trigger_word(raw_content)
             if not triggered:
@@ -479,7 +480,9 @@ async def process_event(data: dict):
             )
             if reply is None:
                 return
-            await send_text(group_id, user_id, reply, msg_id, is_group=True)
+            await send_text(
+                group_id, user_id, reply, msg_id, is_group=True, at_user=user_id
+            )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
         schedule(f"{group_id}:{user_id}", _do_reply)

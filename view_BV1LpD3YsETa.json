@@ -1,0 +1,164 @@
+{
+  "bvid": "BV1LpD3YsETa",
+  "aid": 113433492066506,
+  "videos": 2,
+  "tid": 21,
+  "tid_v2": 2100,
+  "tname": "",
+  "tname_v2": "",
+  "copyright": 1,
+  "pic": "http://i1.hdslb.com/bfs/archive/8629cb1acc0e29dcfeab7dbc9ce1d334247c21cc.jpg",
+  "title": "【教学】b站视频 手机怎么分集分p ?",
+  "pubdate": 1730894342,
+  "ctime": 1730857947,
+  "desc": "2025年现在不必去网页端那边了\n怕有人要用网页端就把链接放评论区了\n100粉自动解锁此功能，稿件管理那边\n\n有些人不必百粉就能分p，详细方式我不知道\n有知道的可以告诉我下，我再投稿上去\n\n\n这是去年的视频 放着不管啦\n本UP不互关了，评论区你们随意~",
+  "desc_v2": [
+    {
+      "raw_text": "2025年现在不必去网页端那边了\n怕有人要用网页端就把链接放评论区了\n100粉自动解锁此功能，稿件管理那边\n\n有些人不必百粉就能分p，详细方式我不知道\n有知道的可以告诉我下，我再投稿上去\n\n\n这是去年的视频 放着不管啦\n本UP不互关了，评论区你们随意~",
+      "type": 1,
+      "biz_id": 0
+    }
+  ],
+  "state": 0,
+  "duration": 137,
+  "rights": {
+    "bp": 0,
+    "elec": 0,
+    "download": 1,
+    "movie": 0,
+    "pay": 0,
+    "hd5": 1,
+    "no_reprint": 0,
+    "autoplay": 1,
+    "ugc_pay": 0,
+    "is_cooperation": 0,
+    "ugc_pay_preview": 0,
+    "no_background": 0,
+    "clean_mode": 0,
+    "is_stein_gate": 0,
+    "is_360": 0,
+    "no_share": 0,
+    "arc_pay": 0,
+    "free_watch": 0
+  },
+  "owner": {
+    "mid": 389511152,
+    "name": "爱听歌の人机",
+    "face": "https://i2.hdslb.com/bfs/face/fdd80d18920f2184d21db561d7488d98ed6c8f46.jpg"
+  },
+  "stat": {
+    "aid": 113433492066506,
+    "view": 103409,
+    "danmaku": 14,
+    "reply": 5570,
+    "favorite": 2041,
+    "coin": 230,
+    "share": 332,
+    "now_rank": 0,
+    "his_rank": 0,
+    "like": 1798,
+    "dislike": 0,
+    "evaluation": "",
+    "vt": 0
+  },
+  "argue_info": {
+    "argue_msg": "",
+    "argue_type": 0,
+    "argue_link": ""
+  },
+  "dynamic": "",
+  "cid": 26635208162,
+  "dimension": {
+    "width": 1080,
+    "height": 2400,
+    "rotate": 0
+  },
+  "premiere": null,
+  "teenage_mode": 0,
+  "is_chargeable_season": false,
+  "is_story": true,
+  "is_upower_exclusive": false,
+  "is_upower_play": false,
+  "is_upower_preview": false,
+  "enable_vt": 0,
+  "vt_display": "",
+  "is_upower_exclusive_with_qa": false,
+  "is_hua_sheng": false,
+  "no_cache": false,
+  "pages": [
+    {
+      "cid": 26635208162,
+      "page": 1,
+      "from": "vupload",
+      "part": "100粉解锁此功能 这是去年视频直接看顶置评论说明吧",
+      "duration": 106,
+      "vid": "",
+      "weblink": "",
+      "dimension": {
+        "width": 1080,
+        "height": 2400,
+        "rotate": 0
+      },
+      "first_frame": "http://i2.hdslb.com/bfs/storyff/n241106ad2qgu3ngb5djc722rto34dc7_firsti.jpg",
+      "ctime": 1730857947
+    },
+    {
+      "cid": 27351058982,
+      "page": 2,
+      "from": "vupload",
+      "part": "测试分p  九洗洁精新疆的没事经常几点能到家假的假的假的男的女的你假的假的假的你的你的你的那你与环境的",
+      "duration": 31,
+      "vid": "",
+      "weblink": "",
+      "dimension": {
+        "width": 1440,
+        "height": 1080,
+        "rotate": 0
+      },
+      "first_frame": "http://i1.hdslb.com/bfs/storyff/n241215ad1u0ei1xiz73tdw3wr8him1r_firsti.jpg",
+      "ctime": 1734239462
+    }
+  ],
+  "subtitle": {
+    "allow_submit": false,
+    "list": [
+      {
+        "id": 1616548064317979648,
+        "lan": "ai-zh",
+        "lan_doc": "中文",
+        "is_lock": false,
+        "subtitle_url": "",
+        "type": 1,
+        "id_str": "1616548064317979648",
+        "ai_type": 0,
+        "ai_status": 2,
+        "subtitle_height": null,
+        "author": {
+          "mid": 0,
+          "name": "",
+          "sex": "",
+          "face": "",
+          "sign": "",
+          "rank": 0,
+          "birthday": 0,
+          "is_fake_account": 0,
+          "is_deleted": 0,
+          "in_reg_audit": 0,
+          "is_senior_member": 0,
+          "name_render": null,
+          "handle": ""
+        }
+      }
+    ]
+  },
+  "is_season_display": false,
+  "user_garb": {
+    "url_image_ani_cut": ""
+  },
+  "honor_reply": {},
+  "like_icon": "",
+  "need_jump_bv": false,
+  "disable_show_up_info": false,
+  "is_story_play": 0,
+  "is_view_self": false
+}

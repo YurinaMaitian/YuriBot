@@ -95,6 +95,30 @@ async def handle_chat(
     """
     AI 聊天入口。返回 None 表示静默丢弃（拟人"忘了回复"），调用方不要发消息。
     """
+
+    # ===== B站分享：卡片反查 / 链接解析 =====
+    from services import bili_tool
+
+    video_note = ""
+    card_title, preview_url = bili_tool.detect_bili_card(content)
+    if card_title:
+        vid, how = await bili_tool.video_from_card(card_title, preview_url)
+        if not vid:
+            video_note = (
+                f"\n\n【系统提示】群友分享了B站视频卡片《{card_title}》，"
+                "按标题没搜到对应视频。用人设自然地请对方直接发链接，可顺带吐槽标题。"
+            )
+        else:
+            video_note = "\n\n" + await bili_tool.build_video_block(vid)
+            if how == "guessed":
+                video_note += (
+                    "\n（此视频是按标题搜索匹配的第一个结果，如不对群友会纠正）"
+                )
+    else:
+        vid, p = await bili_tool.resolve_bv(content)
+        if vid:
+            video_note = "\n\n" + await bili_tool.build_video_block(vid, p)
+
     # 1. 历史 + 路由（两者共用，后续 build_prompt 复用不重复调用）
     history_text = await get_history_text(group_id, user_id)
     plan = await route(content, history_text)
@@ -112,6 +136,9 @@ async def handle_chat(
     prompt = await build_prompt(
         group_id, user_id, content, plan=plan, history_text=history_text
     )
+
+    if video_note:
+        prompt += video_note
 
     if delta > 0.5:
         prompt += f"\n\n【时间感知】你刚才花了 {delta:.0f} 秒才看清图。"

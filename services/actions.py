@@ -4,6 +4,9 @@ from core.messenger import send_split_message
 from services.media import upload_image, send_image as _send_image_raw
 
 
+from services.state import load_state, is_reply_at_enabled
+
+
 async def send_text(
     group_id: str,
     user_id: str,
@@ -11,13 +14,19 @@ async def send_text(
     msg_id: str,
     is_group: bool = True,
     memory_tag: str = "",
+    at_user: str = "",
 ):
     url = (
         f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         if is_group
         else f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
     )
-    await send_split_message(url, content, msg_id)
+
+    # 回@策略集中在这里：仅群聊、开关开启时生效
+    at_id = (
+        at_user if (at_user and is_group and is_reply_at_enabled(load_state())) else ""
+    )
+    await send_split_message(url, content, msg_id, at_user_id=at_id)
 
     target_id = group_id if is_group else user_id
     await record_message(target_id, user_id, "bot", f"{memory_tag}{content}")

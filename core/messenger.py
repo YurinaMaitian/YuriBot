@@ -3,7 +3,7 @@ import aiohttp
 from core.ai import get_token, refresh_token
 
 
-async def send_split_message(url: str, content: str, msg_id: str):
+async def send_split_message(url: str, content: str, msg_id: str, at_user_id: str = ""):
     """发送回复，自动分条，Token过期自动刷新"""
     if not content or not content.strip():
         print("[警告] 尝试发送空消息")
@@ -26,8 +26,18 @@ async def send_split_message(url: str, content: str, msg_id: str):
             final_chunks.append(p)
 
     for i, chunk in enumerate(final_chunks, start=1):
-        payload = {"content": chunk, "msg_type": 0, "msg_id": msg_id, "msg_seq": i}
+        if i == 1 and at_user_id:
+            # 回@：文本消息不解析 at 标签，必须走 markdown 通道
+            payload = {
+                "msg_type": 2,
+                "markdown": {"content": f'<qqbot-at-user id="{at_user_id}" />{chunk}'},
+                "msg_id": msg_id,
+                "msg_seq": i,
+            }
+        else:
+            payload = {"content": chunk, "msg_type": 0, "msg_id": msg_id, "msg_seq": i}
 
+        # ……以下原有的发送/重试逻辑不动        # ……以下原有发送/重试逻辑不动
         for attempt in range(2):
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=payload) as r:

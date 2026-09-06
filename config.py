@@ -83,3 +83,6 @@ SCENE_IDLE_FORCE = int(os.getenv("SCENE_IDLE_FORCE", "600"))  # 静默秒数，�
 SCENE_MAX_QUEUE = int(os.getenv("SCENE_MAX_QUEUE", "120"))  # 队列硬顶，超过必须切
 SCENE_MIN_CUT = int(os.getenv("SCENE_MIN_CUT", "4"))  # 最小成段长度
 SCENE_SCAN_INTERVAL = int(os.getenv("SCENE_SCAN_INTERVAL", "30"))  # 后台扫描间隔（秒）
+
+# ========== B站解析 ==========
+BILI_COOKIE = os.getenv("BILI_COOKIE", "")  # SESSDATA=...; bili_jct=...; buvid3=...
