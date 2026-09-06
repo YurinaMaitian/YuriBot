@@ -131,3 +131,14 @@ INTERJECT_SILENCE = float(
 HISTORY_MERGE_GAP_MIN = int(
     os.getenv("HISTORY_MERGE_GAP_MIN", "3")
 )  # 同发言人相邻消息合并的时间闸门（分钟）
+
+
+# ========== 发送队列（拟人化输出） ==========
+SEND_BUBBLE_MAX = int(os.getenv("SEND_BUBBLE_MAX", "4"))  # 每回合气泡数硬顶
+SEND_PACE_BASE = float(os.getenv("SEND_PACE_BASE", "1.0"))  # 泡间基础延迟（秒）
+SEND_PACE_PER_CHAR = float(os.getenv("SEND_PACE_PER_CHAR", "0.12"))  # 打字系数（秒/字）
+SEND_PACE_JITTER = float(os.getenv("SEND_PACE_JITTER", "0.8"))  # 抖动幅度（±秒）
+SEND_TURN_GAP = float(os.getenv("SEND_TURN_GAP", "2.0"))  # 回合间换气（秒）
+SEND_JOB_MAX_WAIT = float(
+    os.getenv("SEND_JOB_MAX_WAIT", "120")
+)  # 任务排队超时下限（秒，防msg_id过期）

@@ -40,6 +40,7 @@ from core.memory import (
 from core.scene import get_current_scene
 from services.db import DB_PATH
 from services.user_manager import get_nickname
+from services.actions import send_text_chat
 
 JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息后会不会想接话。
 
@@ -302,13 +303,13 @@ def _schedule_reply(item: _JudgeItem, delay: float = 1.5):
         )
         if not reply_text:
             return
-        await send_text(
+        await send_text_chat(
             item.group_id,
             item.user_id,
             reply_text,
             item.msg_id,
             is_group=True,
-            at_user="",
+            priority=False,
         )
         await check_and_update_scene(item.group_id, item.user_id, "bot", reply_text)
 

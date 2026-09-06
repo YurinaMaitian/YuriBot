@@ -16,13 +16,13 @@ async def send_text(
     memory_tag: str = "",
     at_user: str = "",
 ):
+    """即发通道：指令/系统回复用（整段连续发，不排队不做气泡）。"""
     url = (
         f"https://api.sgroup.qq.com/v2/groups/{group_id}/messages"
         if is_group
         else f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
     )
 
-    # 回@策略集中在这里：仅群聊、开关开启时生效
     at_id = (
         at_user if (at_user and is_group and is_reply_at_enabled(load_state())) else ""
     )
@@ -30,6 +30,37 @@ async def send_text(
 
     target_id = group_id if is_group else user_id
     await record_message(target_id, user_id, "bot", f"{memory_tag}{content}")
+
+
+async def send_text_chat(
+    group_id: str,
+    user_id: str,
+    content: str,
+    msg_id: str,
+    is_group: bool = True,
+    memory_tag: str = "",
+    at_user: str = "",
+    priority: bool = False,
+):
+    """
+    人设对话发送：进发送队列（串行 + 打字节奏 + 气泡化）。
+    priority=True 插到队首（@回复有人等）；False 排队（插话回复）。
+    """
+    from services.sender import enqueue_chat
+
+    at_id = (
+        at_user if (at_user and is_group and is_reply_at_enabled(load_state())) else ""
+    )
+    await enqueue_chat(
+        group_id,
+        user_id,
+        content,
+        msg_id,
+        is_group=is_group,
+        at_user=at_id,
+        priority=priority,
+        memory_tag=memory_tag,
+    )
 
 
 async def send_image(

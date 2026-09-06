@@ -32,7 +32,7 @@ from utils.scene_manager import (
 )
 from services.vector_store import init_collection
 from core.ai import refresh_token
-from services.actions import send_text
+from services.actions import send_text, send_text_chat
 from collections import deque
 
 import hashlib
@@ -113,13 +113,24 @@ def _extract_quote(d: dict) -> tuple[str, list[dict]]:
     return quote_text, quote_images
 
 
+def _strip_face_tags(content: str) -> str:
+    """把 <faceType=...> 标签全部替换为 [表情]（可能有多个）"""
+    while "<faceType=" in content:
+        start = content.find("<faceType=")
+        end = content.find(">", start)
+        if end == -1:
+            break
+        content = content[:start] + "[表情]" + content[end + 1 :]
+    return content
+
+
 def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
     """
     提取消息内容 + 图片附件。
     支持：纯文字、纯图片、文字+图片混合（attachments 或 markdown 内嵌）。
     返回：(处理后的文本, 图片列表)
     """
-    content = d.get("content", "").strip()
+    content = _strip_face_tags(d.get("content", "").strip())
     attachments = d.get("attachments", [])
 
     quote_text, quote_images = _extract_quote(d)
@@ -292,12 +303,14 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
-            reply = await handle_chat(
-                clean_content,
-                user_id=user_id,
-                group_id=group_id,
-                msg_id=msg_id,
+            await send_text_chat(
+                group_id,
+                user_id,
+                reply,
+                msg_id,
                 is_group=True,
+                at_user=user_id,
+                priority=True,
             )
             if reply is None:
                 return
@@ -329,6 +342,7 @@ async def process_event(data: dict):
         # 图片占位（后台解析）：@Bot 记清理后内容，免@ 记原始内容
         base_content = clean_content if is_at_bot else raw_content
         base_content = await normalize_mentions(base_content)
+        base_content = _strip_face_tags(base_content)
         msg_to_record = await _process_images(base_content, images)
 
         # 群状态管理
@@ -377,12 +391,14 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
-            reply = await handle_chat(
-                msg_to_record,
-                user_id=user_id,
-                group_id=group_id,
-                msg_id=msg_id,
+            await send_text_chat(
+                group_id,
+                user_id,
+                reply,
+                msg_id,
                 is_group=True,
+                at_user=user_id,
+                priority=True,
             )
             if reply is None:
                 return
