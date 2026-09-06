@@ -82,13 +82,8 @@ async def send_text_chat(
 
         else:
             asyncio.create_task(
-                meme_store.maybe_attach_meme(
-                    group_id,
-                    user_id,
-                    content,
-                    msg_id,
-                    is_group,
-                    user_text=trigger_content,
+                meme_store.user_asked_meme(
+                    group_id, user_id, content, trigger_content, msg_id, is_group
                 )
             )
 

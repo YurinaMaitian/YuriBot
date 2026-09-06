@@ -237,6 +237,15 @@ async def build_prompt(
         if bg:
             lines.append(f"【你的背景】\n{bg}")
 
+    if plan.get("slang"):
+        from services.slang_store import search_slang_entries
+
+        entries = await search_slang_entries(current_msg)
+        if entries:
+            lines.append("【梗百科】")
+            for e in entries[:2]:
+                lines.append(f"- {e['term']}：{e['explanation']}")
+
     if plan.get("scene") and group_id:
         from services.embedding import embed_text
         from services.vector_store import search_scenes

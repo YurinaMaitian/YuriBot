@@ -192,3 +192,80 @@ async def search_memes(
     except Exception as e:
         print(f"[Qdrant] 表情包检索失败: {e}")
         return []
+
+
+# ========== 梗百科索引 ==========
+
+SLANG_COLLECTION = "slang"
+
+
+async def init_slang_collection():
+    client = _get_client()
+    try:
+        collections = await client.get_collections()
+        if SLANG_COLLECTION in [c.name for c in collections.collections]:
+            print(f"[Qdrant] Collection '{SLANG_COLLECTION}' 已存在")
+            return
+        await client.create_collection(
+            collection_name=SLANG_COLLECTION,
+            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        )
+        print(f"[Qdrant] Collection '{SLANG_COLLECTION}' 创建成功")
+    except Exception as e:
+        print(f"[Qdrant] slang 初始化失败: {e}")
+
+
+async def upsert_slang_point(
+    point_id: int, term: str, explanation: str, group_id: str, vector: list[float]
+):
+    client = _get_client()
+    try:
+        await client.upsert(
+            collection_name=SLANG_COLLECTION,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "term": term,
+                        "explanation": explanation,
+                        "group_id": group_id,
+                    },
+                )
+            ],
+        )
+    except Exception as e:
+        print(f"[Qdrant] 梗入库失败 {term}: {e}")
+
+
+async def delete_slang_point(point_id: int):
+    client = _get_client()
+    try:
+        await client.delete(
+            collection_name=SLANG_COLLECTION,
+            points_selector=PointIdsList(points=[point_id]),
+        )
+    except Exception as e:
+        print(f"[Qdrant] 梗删索引失败 {point_id}: {e}")
+
+
+async def search_slang_points(query_vector: list[float], top_k: int = 2) -> list[dict]:
+    client = _get_client()
+    try:
+        results = await client.search(
+            collection_name=SLANG_COLLECTION,
+            query_vector=query_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+        return [
+            {
+                "term": r.payload.get("term", ""),
+                "explanation": r.payload.get("explanation", ""),
+                "score": r.score,
+            }
+            for r in results
+        ]
+    except Exception as e:
+        print(f"[Qdrant] 梗检索失败: {e}")
+        return []

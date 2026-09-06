@@ -291,3 +291,47 @@ async def imgdesc_cmd(ctx):
     asyncio.create_task(meme_store.sync_index(fn))
 
     return f"✅ 已订正 {fn[:12]}… 的描述并锁定"
+
+
+from services import slang_store
+
+
+@cmd("梗", desc="[主人] 教/改群梗，用法: /梗 词 = 解释", hidden=True)
+async def slang_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    if "=" not in ctx.raw:
+        return "用法：/梗 词 = 解释\n示例：/梗 圣遗物歪 = 强化时副词条没随机到想要的属性，全加防御生命就叫歪了\n（对已存在的词重复教学即为修改）"
+    term, explanation = ctx.raw.split("=", 1)
+    term, explanation = term.strip(), explanation.strip()
+    if not term or not explanation:
+        return "❌ 词和解释都不能为空"
+    ok = await slang_store.add_slang(term, explanation)
+    if not ok:
+        return "❌ 入库失败，看日志"
+    return f"✅ 已收录【{term}】"
+
+
+@cmd("梗del", desc="[主人] 删除群梗，用法: /梗del 词", hidden=True)
+async def slangdel_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    term = ctx.raw.strip()
+    if not term:
+        return "用法：/梗del 词"
+    if await slang_store.delete_slang(term):
+        return f"✅ 已删除【{term}】"
+    return f"❌ 库里没有【{term}】"
+
+
+@cmd("梗list", desc="[主人] 查看已收录的群梗", hidden=True)
+async def slanglist_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    rows = await slang_store.list_slang()
+    if not rows:
+        return "梗百科是空的，用 /梗 词 = 解释 来教她"
+    lines = [f"📚 已收录 {len(rows)} 条："]
+    for r in rows:
+        lines.append(f"- {r['term']}：{r['explanation'][:40]}")
+    return "\n".join(lines)

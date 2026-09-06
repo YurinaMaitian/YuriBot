@@ -37,7 +37,6 @@ MEME_DIR = os.path.join(DATA_DIR, "memes")
 RECENT_DIR = os.path.join(DATA_DIR, "images_recent")
 RECENT_KEEP_DAYS = 3
 
-_ECHO_RE = re.compile(r"(同样|同款|这张|这个|原图|还发|再来)")
 _MEME_REQ_RE = re.compile(r"【求图[:：]([^】]+)】")
 
 CHOOSER_SYSTEM = """你是表情包挑选器。给定"她刚说的话"、她的配图意图和候选表情包列表，选出最贴合的一张。
@@ -88,10 +87,12 @@ async def meme_tool_loop(
     request: str,
     msg_id: str,
     is_group: bool = True,
+    query: str = "",
 ):
-    """求图协议：检索 → 二次调用点选 → 入队发送。文字气泡已先行。"""
+    """求图协议：检索 → 二次调用点选 → 入队发送。文字气泡已先行。
+    query：检索用查询词，默认=request（兜底场景传她的话更合适）"""
     try:
-        vector = await embed_text(request[:100])
+        vector = await embed_text((query or request)[:100])
         # 显式求图，门槛放低（她都开口要了，候选差点也给她挑）
         cands = [
             c
@@ -167,64 +168,37 @@ async def meme_tool_loop(
         print(f"[表情包] {type(e).__name__}: {e}")
 
 
-# ========== echo 指代回发 ==========
+_USER_ASK_RE = re.compile(
+    r"(发个?表情包|发一张表情|来张表情|来个表情|给我发.*表情|你也发一张|斗图)"
+)
 
 
-def _last_context_image(group_id: str, user_id: str) -> str | None:
-    ctx = get_context(group_id, user_id)
-    for m in reversed(ctx[-10:]):
-        found = re.findall(r"【图片:([^】]+)】", m.get("content", ""))
-        if found:
-            return found[-1]
-    return None
-
-
-async def maybe_attach_meme(
+async def user_asked_meme(
     group_id: str,
     user_id: str,
     reply_text: str,
+    user_text: str,
     msg_id: str,
     is_group: bool = True,
-    user_text: str = "",
 ):
-    """仅 echo：群友要求"再发一遍这张/同样的"→ 原图回发。"""
-    try:
-        text = reply_text.strip()
-        if len(text) < MEME_MIN_REPLY_LEN:
-            return
-        combined = f"{user_text} {text}"
-        if not _ECHO_RE.search(combined):
-            return
-        target = None
-        m = re.findall(r"【图片:([^】]+)】", user_text or "")
-        if m:
-            target = m[-1]
-        if target is None:
-            target = _last_context_image(group_id, user_id)
-        if not target:
-            return
-        p = resolve_file(target)
-        if not p:
-            await _log(group_id, text, None, [], None, "echo_missing_file", target[:16])
-            return
-        info = await image_cache.get_image(target)
-        desc = (info and info["description"]) or "群友的那张图"
-        await _deliver_path(
-            group_id,
-            user_id,
-            p,
-            desc,
-            msg_id,
-            is_group,
-            text,
-            [],
-            "echo",
-            None,
-            "",
-            enforce_cooldown=False,
-        )
-    except Exception as e:
-        print(f"[表情包] {type(e).__name__}: {e}")
+    """
+    过渡脚手架：群友点名要图但她没走求图协议 → 替她发起工具循环。
+    协议采纳率成熟后删除此函数（原则：只有她自己觉得该发才发）。
+    """
+    if not _USER_ASK_RE.search(user_text or ""):
+        return
+    text = reply_text.strip()
+    if len(text) < MEME_MIN_REPLY_LEN:
+        return
+    await meme_tool_loop(
+        group_id,
+        user_id,
+        text,
+        request="群友点名要一张表情包",
+        msg_id=msg_id,
+        is_group=is_group,
+        query=text,
+    )
 
 
 # ========== 发送 ==========

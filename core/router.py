@@ -10,10 +10,11 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
 - preference：Bot 的喜好/雷点（番剧、角色、食物等）
 - scene：情景记忆（之前聊过什么相关话题）
 - persona_bg：Bot 的自身背景事实（坐标、学校、家庭、外貌等设定）
+- slang：群梗/黑话/圈内新用法（消息里可能含有你不知道的圈内词、缩写、新梗）
 - referenced_images：当前消息明确引用或追问的图片文件名列表。
 
 输出严格 JSON，不要解释，不要 markdown 代码块：
-{"time": true/false, "preference": true/false, "scene": true/false, "persona_bg": true/false, "referenced_images": ["文件名"]}
+{"time": true/false, "preference": true/false, "scene": true/false, "persona_bg": true/false, "slang": true/false, "referenced_images": ["文件名"]}
 
 判断规则：
 - 空消息/纯@ → 结合上文判断
@@ -21,6 +22,7 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
 - 问"你喜欢什么""推荐""xx怎么样"、提到具体作品/角色/食物 → preference
 - 追问"刚才""之前""你不是说" → scene
 - 问"你在哪""哪里人""住哪""哪个学校""多高""家里""背景"等自身设定 → persona_bg
+- 消息含圈内黑话/缩写/明显不合字面意思的新用法、或问"xx是什么意思/啥梗" → slang
 - referenced_images 的判断（重要）：
   - 历史消息中可能出现旧格式【图片：描述】（全角冒号），那是没有文件名的旧记录，无法引用，一律不要列入 referenced_images
   - 只有半角格式【图片:文件名】里的内容才能作为 filename
@@ -30,7 +32,7 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
   - 当前消息与图片无关 → 必须为空数组
   - 找不到或超出记录范围 → 空数组"""
 
-_KEYS = ("time", "preference", "scene", "persona_bg")
+_KEYS = ("time", "preference", "scene", "persona_bg", "slang")
 
 
 def _route_rule(user_msg: str) -> dict:
@@ -58,6 +60,7 @@ def _route_rule(user_msg: str) -> dict:
             "preference": False,
             "scene": True,
             "persona_bg": False,
+            "slang": False,
         }
     if any(
         k in m
@@ -81,6 +84,16 @@ def _route_rule(user_msg: str) -> dict:
             "preference": False,
             "scene": False,
             "persona_bg": True,
+            "slang": False,
+        }
+    if any(k in m for k in ["什么意思", "啥梗", "是什么梗", "什么意思"]):
+        return {
+            **base,
+            "time": False,
+            "preference": False,
+            "scene": False,
+            "persona_bg": False,
+            "slang": True,
         }
     if any(
         k in m
@@ -103,6 +116,7 @@ def _route_rule(user_msg: str) -> dict:
             "preference": True,
             "scene": False,
             "persona_bg": False,
+            "slang": False,
         }
     return {
         **base,
@@ -110,6 +124,7 @@ def _route_rule(user_msg: str) -> dict:
         "preference": False,
         "scene": False,
         "persona_bg": False,
+        "slang": False,
     }
 
 
@@ -134,7 +149,6 @@ def _parse_router_json(raw: str) -> dict | None:
     images = plan.get("referenced_images", [])
     if not isinstance(images, list):
         images = []
-    # 硬校验：只放行合法文件名，防止模型把图片描述/其他文本当成 filename
     valid, dropped = [], []
     for i in images:
         s = str(i).strip()
@@ -147,6 +161,7 @@ def _parse_router_json(raw: str) -> dict | None:
         "preference": bool(plan.get("preference", False)),
         "scene": bool(plan.get("scene", False)),
         "persona_bg": bool(plan.get("persona_bg", False)),
+        "slang": bool(plan.get("slang", False)),
         "referenced_images": valid,
     }
 

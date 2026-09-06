@@ -430,6 +430,12 @@ async def lifespan(app: FastAPI):
     from services.vector_store import init_memes_collection
     from services.meme_store import init_meme_log_table
 
+    from services.vector_store import init_slang_collection
+    from services.slang_store import init_slang_table
+
+    await init_slang_table()
+    await init_slang_collection()
+
     await init_memes_collection()
     await init_meme_log_table()
 
