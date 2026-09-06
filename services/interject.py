@@ -44,10 +44,9 @@ from services.actions import send_text_chat
 
 JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息后会不会想接话。
 
-【重要】这个队列里的消息都没有@YuriBot；消息中出现的 @某人 或 @昵称，指的都是其他群友，不是她。
-addressee 判断时：消息以 @xxx 开头 → 一律 someone:xxx，绝不可能是 yuri。
+【重要】这个队列里的消息都没有@YuriBot；消息中出现的 @某人 或 @某位群友，指的都是其他群友，不是她。
 
-【她是谁】YuriBot：广州市天河区的高二宅女，回家部。兴趣：二次元（番剧/谷子/同人）、游戏、日常闲聊。无感：体育运动、现充社交。说话短、有梗但克制。
+【她是谁】YuriBot（群里也被叫 yuri / bot）：广州市天河区的高二宅女，回家部。兴趣：二次元（番剧/谷子/同人）、游戏、日常闲聊。无感：体育运动、现充社交。说话短、有梗但克制。
 
 【她的可得性】（结合【她现在】判断）：
 - 睡觉（23:00-6:00）→ 基本不回，除非被直接叫醒
@@ -57,22 +56,22 @@ addressee 判断时：消息以 @xxx 开头 → 一律 someone:xxx，绝不可�
 【判断标准】
 - 这句话掉在地上可不可惜？有话接、有槽吐、有共情点 → reply=true
 - 群友分享日常（吃饭/上课/吐槽）她常会捧场，但话少，也算 reply=true
-- 纯表情包/纯图（无文字或只有配字）→ 倾向 false；除非特别想吐槽，否则一句短回
+- 纯表情包/纯图 → 倾向 false，除非特别想吐槽
 - 她明显没空（在睡觉/在上课）→ 倾向 false
 - 拿不准时倾向 false：接错话比错过可惜
 
 判断步骤：
 第一步，判断新消息对谁说（addressee）：
-- "yuri"：主语是她、点她名、请求她做事（"你帮我X""yuri你看这个"）
-- "someone:名字"：明确点名其他某个成员（包括消息开头带 @昵称、@某位群友）
-- "everyone"：对全群的开放喊话/提问（"群里有人吗""谁看过XX"）
+- "yuri"：主语是她、点她名、请求她做事，或者——她刚发过言，这条消息在回应/评价/吐槽她刚说的话或做的事（夸她、骂她、纠正她、问她"你怎么这样"），哪怕一个名字都没提
+- "someone:名字"：明确点名其他某个成员，问的是那个人的事
+- "everyone"：对全群的开放喊话/提问
 - "none"：自言自语/纯通知，没有明确对象
 
-第二步，结合 addressee 决定 reply：
-- someone:别人 → 默认 false（别抢话）；只有那句话明显也抛给了她时才 true
-- everyone → 她可能举手，有话接就 true
-- yuri → 必须 true（被点到了不能沉默）；请求超出能力也 true——回应"办不到"或变相帮忙
-- none → 按上面的判断标准
+第二步，决定 reply：
+- addressee 是 someone:别人 → 默认 false（别抢话）；只有那句话明显也抛给了她时才 true
+- addressee 是 everyone → 她可能举手，有话接就 true
+- addressee 是 yuri → 必须 true（被点到了不能沉默）；请求超出能力也 true——回应"办不到"或变相帮忙，而不是装死
+- addressee 是 none → 按上面的判断标准
 
 输出严格 JSON，不要解释：
 {"addressee": "yuri|everyone|none|someone:名字", "reply": true/false, "reason": "≤15字"}
@@ -84,7 +83,9 @@ addressee 判断时：消息以 @xxx 开头 → 一律 someone:xxx，绝不可�
 示例3：
 群聊：麦田: 你帮我@一下mjl → {"addressee":"yuri","reply":true,"reason":"点她做事，@不了就文字代喊"}
 示例4：
-群聊：麦田: 今天食堂的菜好咸 → {"addressee":"none","reply":true,"reason":"日常吐槽，捧场"}"""
+群聊：YuriBot: 这是bfnz，就是逼飞奶炸 / 麦田: 你怎么能这么粗俗，直接说出那个词 → {"addressee":"yuri","reply":true,"reason":"在评价她刚说的话，必须接"}
+示例5：
+群聊：YuriBot: （刚才的发言） / 麦田: oi → {"addressee":"yuri","reply":true,"reason":"喊她回应，在叫她"}"""
 
 CONTINUATION_NOTE = (
     "\n\n（注意：这是她刚发过言后的延续对话，或群友引用了她的话，"
@@ -325,7 +326,7 @@ async def _judge_one(item: _JudgeItem):
     current_line = lines[-1]
     continuation = item.has_quote or any(m["speaker"] == "bot" for m in ctx[-2:])
 
-    system = JUDGE_SYSTEM + (CONTINUATION_NOTE if continuation else "")
+    system = JUDGE_SYSTEM
     judge_input = (
         f"【本群成员】YuriBot（她，也被叫 yuri / bot）、{_roster_text(ctx)}\n"
         f"【她现在】{get_current_scene()}\n"
@@ -333,6 +334,8 @@ async def _judge_one(item: _JudgeItem):
         f"【新消息】{current_line}\n\n"
         "按步骤判断她会不会想接话。"
     )
+    if continuation:
+        judge_input += "\n\n（注意：上一条消息就是她刚发的，这条消息很可能是对她说的或要她回应的。）"
     raw = await _call_judge(system, judge_input)
     reply, reason, addressee = _parse_judge(raw)
     print(
