@@ -176,7 +176,7 @@ async def substitute_image_placeholders(text: str) -> str:
     for fn in filenames:
         info = await image_cache.get_image(fn)
         if info and info["status"] == "success" and info["description"]:
-            descs[fn] = info["description"]
+            descs[fn] = f"【{image_cache.label_of(info['type'])}】{info['description']}"
     if not descs:
         return text
     return IMAGE_PLACEHOLDER_RE.sub(

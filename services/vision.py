@@ -31,6 +31,23 @@ def _is_ocr_request(user_text: str) -> bool:
     return any(k in user_text for k in _OCR_KEYWORDS)
 
 
+def _guess_type_from_desc(desc: str) -> str:
+    """vision 没输出【类型】前缀时的确定性兜底"""
+    for kw in ("表情包", "梗图", "配文", "熊猫头"):
+        if kw in desc:
+            return "meme"
+    for kw in ("截图", "界面", "聊天记录", "屏幕"):
+        if kw in desc:
+            return "screenshot"
+    for kw in ("插画", "画作", "手绘", "漫画"):
+        if kw in desc:
+            return "drawing"
+    for kw in ("照片", "拍摄", "自拍"):
+        if kw in desc:
+            return "photo"
+    return "other"
+
+
 async def describe_image(
     image_url: str,
     filename: str,
@@ -108,10 +125,17 @@ async def describe_image(
             await image_cache.mark_failed(filename)
             return "一张图片"
 
+        # 解析【类型】前缀 → type 列，描述本体保持干净
+        m = image_cache._TYPE_PREFIX_RE.match(desc)
+        if m:
+            img_type = image_cache.LABEL_TO_TYPE.get(m.group(1), "other")
+            desc = desc[m.end() :].strip()
+        else:
+            img_type = _guess_type_from_desc(desc)
         if len(desc) > 100:
             desc = desc[:100]
 
-        await image_cache.mark_success(filename, desc)
+        await image_cache.mark_success(filename, desc, img_type)
         print(f"[Vision识别成功] {filename[:20]} -> {desc[:40]}")
         return desc
 

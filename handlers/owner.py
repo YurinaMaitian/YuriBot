@@ -203,3 +203,83 @@ async def reschedule_cmd(ctx):
     if not data:
         return "⚠️ 生成失败，今天回退静态表。稍后再试或看日志。"
     return f"✅ 已重新生成：心情{data.get('mood', '?')}，{len(data.get('blocks', []))}个时段"
+
+
+from services import image_cache as img_cache
+
+
+async def _resolve_image(prefix: str) -> tuple[str | None, str | None]:
+    """前缀唯一匹配 → (filename, None)；失败 → (None, 错误信息)"""
+    matches = await img_cache.find_by_prefix(prefix)
+    if not matches:
+        return None, f"❌ 没有找到以 {prefix!r} 开头的图片记录"
+    if len(matches) > 1:
+        names = "、".join(m["filename"][:12] for m in matches)
+        return None, f"❌ 前缀匹配到 {len(matches)} 张（{names} 等），请加长前缀"
+    return matches[0]["filename"], None
+
+
+@cmd(
+    "imginfo", desc="[主人] 查看图片识别信息，用法: /imginfo <文件名前缀>", hidden=True
+)
+async def imginfo_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    prefix = ctx.raw.strip()
+    if not prefix:
+        return (
+            "用法：/imginfo <文件名前缀>\n（日志里【图片:xxxx.png】的 xxxx 前几位即可）"
+        )
+    matches = await img_cache.find_by_prefix(prefix)
+    if not matches:
+        return f"❌ 没有找到以 {prefix!r} 开头的图片记录"
+    lines = []
+    for m in matches[:5]:
+        label = img_cache.label_of(m["type"])
+        lock = " 🔒" if m["manual"] else ""
+        ts = str(m["created_at"])[:16] if m["created_at"] else "?"
+        lines.append(
+            f"#{m['id']} {m['filename'][:20]}… [{m['status']}] 【{label}】{m['description'][:45]}{lock}（{ts}）"
+        )
+    return "\n".join(lines)
+
+
+@cmd(
+    "imgset",
+    desc="[主人] 订正图片类型，用法: /imgset <前缀> <表情包|照片|截图|手绘|其他>",
+    hidden=True,
+)
+async def imgset_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    parts = ctx.raw.split(maxsplit=1)
+    if len(parts) != 2:
+        return "用法：/imgset <文件名前缀> <类型>\n类型：表情包/照片/截图/手绘/其他\n示例：/imgset B07F 表情包"
+    prefix, label = parts[0].strip(), parts[1].strip()
+    fn, err = await _resolve_image(prefix)
+    if err:
+        return err
+    t = img_cache.parse_type(label)
+    if not t:
+        return "❌ 类型必须是：表情包 / 照片 / 截图 / 手绘 / 其他"
+    await img_cache.set_manual(fn, img_type=t)
+    return f"✅ 已订正 {fn[:12]}… 为【{label}】并锁定（自动重解析不会覆盖）"
+
+
+@cmd("imgdesc", desc="[主人] 订正图片描述，用法: /imgdesc <前缀> <新描述>", hidden=True)
+async def imgdesc_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    parts = ctx.raw.split(maxsplit=1)
+    if len(parts) != 2:
+        return (
+            "用法：/imgdesc <文件名前缀> <新描述>\n示例：/imgdesc B07F 熊猫头憋笑梗图"
+        )
+    prefix, desc = parts[0].strip(), parts[1].strip()
+    if not desc:
+        return "❌ 新描述不能为空"
+    fn, err = await _resolve_image(prefix)
+    if err:
+        return err
+    await img_cache.set_manual(fn, description=desc)
+    return f"✅ 已订正 {fn[:12]}… 的描述并锁定"
