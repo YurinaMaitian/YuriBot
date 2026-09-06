@@ -303,6 +303,15 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
+            reply = await handle_chat(
+                clean_content,
+                user_id=user_id,
+                group_id=group_id,
+                msg_id=msg_id,
+                is_group=True,
+            )
+            if reply is None:
+                return
             await send_text_chat(
                 group_id,
                 user_id,
@@ -311,11 +320,6 @@ async def process_event(data: dict):
                 is_group=True,
                 at_user=user_id,
                 priority=True,
-            )
-            if reply is None:
-                return
-            await send_text(
-                group_id, user_id, reply, msg_id, is_group=True, at_user=user_id
             )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
@@ -391,6 +395,15 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
+            reply = await handle_chat(
+                msg_to_record,
+                user_id=user_id,
+                group_id=group_id,
+                msg_id=msg_id,
+                is_group=True,
+            )
+            if reply is None:
+                return
             await send_text_chat(
                 group_id,
                 user_id,
@@ -399,11 +412,6 @@ async def process_event(data: dict):
                 is_group=True,
                 at_user=user_id,
                 priority=True,
-            )
-            if reply is None:
-                return
-            await send_text(
-                group_id, user_id, reply, msg_id, is_group=True, at_user=user_id
             )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
