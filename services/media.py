@@ -29,7 +29,12 @@ async def upload_image(
 
 
 async def send_image(
-    token: str, target_id: str, file_info: str, msg_id: str, is_group: bool = True
+    token: str,
+    target_id: str,
+    file_info: str,
+    msg_id: str,
+    is_group: bool = True,
+    msg_seq: int = 1,
 ):
     url = (
         f"https://api.sgroup.qq.com/v2/groups/{target_id}/messages"
@@ -41,10 +46,9 @@ async def send_image(
     payload = {
         "msg_type": 7,
         "msg_id": msg_id,
-        "msg_seq": 1,
+        "msg_seq": msg_seq,
         "media": {"file_info": file_info},
     }
-
     session = get_session()
     async with session.post(url, headers=headers, json=payload, timeout=30) as r:
         result = await r.json()

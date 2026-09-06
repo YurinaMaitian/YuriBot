@@ -1,14 +1,8 @@
 """
-发送队列（她的"嘴"）：每群串行调度拟人化回复。
+发送队列（她的"嘴"）：每群串行调度拟人化回复 + 表情包图片。
 
-设计：
-- 生成端并行不变，发送端强制串行——一次只说一个回合
-- 优先级：@回复（有人等）> 插话回复；高优先级插到队首
-- 分泡：按句末标点切句，打包 10~30 字气泡；每回合 ≤SEND_BUBBLE_MAX，
-  超出合并进末泡（防热情刷屏）
-- 节奏：首泡立即，后续泡按"打字时间"（基础+字数×系数±抖动）
-- 回合间换气；任务排队超 SEND_JOB_MAX_WAIT 丢弃（msg_id 时效保护）
-- 只服务人设对话；指令/系统回复走 actions.send_text 即发通道，不进队
+- 文本 job：分泡 + 打字节奏（同前）
+- 图片 job：排在文字气泡之后，作为回合收尾发送
 """
 
 import asyncio
@@ -37,11 +31,22 @@ class _SendJob:
         "at_user",
         "is_group",
         "memory_tag",
+        "image_path",
+        "image_desc",
         "enqueued_at",
     )
 
     def __init__(
-        self, group_id, user_id, chunks, msg_id, at_user, is_group, memory_tag
+        self,
+        group_id,
+        user_id,
+        chunks,
+        msg_id,
+        at_user,
+        is_group,
+        memory_tag,
+        image_path="",
+        image_desc="",
     ):
         self.group_id = group_id
         self.user_id = user_id
@@ -50,6 +55,8 @@ class _SendJob:
         self.at_user = at_user
         self.is_group = is_group
         self.memory_tag = memory_tag
+        self.image_path = image_path
+        self.image_desc = image_desc
         self.enqueued_at = time.time()
 
 
@@ -77,17 +84,21 @@ class _GroupQ:
 
 _queues: dict[str, _GroupQ] = {}
 _running: set[str] = set()
-
+_seq_cursor: dict[str, int] = {}
 _SPLIT_RE = re.compile(r"(?<=[。！？!?…~])")
 
 
+def _next_seq(msg_id: str) -> int:
+    n = _seq_cursor.get(msg_id, 0) + 1
+    _seq_cursor[msg_id] = n
+    if len(_seq_cursor) > 2000:  # 防无限增长（被动回复msg_id本就会过期，直接清空重来）
+        _seq_cursor.clear()
+        _seq_cursor[msg_id] = n
+    return n
+
+
 def pack_bubbles(content: str) -> list[str]:
-    """
-    把回复打包成拟人气泡：
-    - 按句末标点切句，短句合并成 10~30 字的气泡
-    - 总泡数超上限 → 多余部分合并进末泡
-    - 单句回复 → 原样单泡
-    """
+    """按句末标点切句打包成拟人气泡；超 SEND_BUBBLE_MAX 合并末泡"""
     text = content.strip()
     if not text:
         return []
@@ -120,6 +131,12 @@ def pack_bubbles(content: str) -> list[str]:
     return bubbles
 
 
+def _ensure_worker(group_id: str, q: _GroupQ):
+    if group_id not in _running:
+        _running.add(group_id)
+        asyncio.create_task(_worker(group_id, q))
+
+
 async def enqueue_chat(
     group_id: str,
     user_id: str,
@@ -130,19 +147,7 @@ async def enqueue_chat(
     priority: bool = False,
     memory_tag: str = "",
 ):
-    """人设对话发送入口：分泡入队，由 worker 按节奏逐泡发送并逐泡进记忆"""
-    import traceback
-
-    dup = [
-        j
-        for q in _queues.values()
-        for _, j in q.items
-        if j.msg_id == msg_id and j.chunks and j.chunks[0][:15] == content.strip()[:15]
-    ]
-    if dup:
-        print(f"[发送队列] 疑似重复入队: msg_id={msg_id}, content={content[:20]!r}")
-        traceback.print_stack()
-
+    """人设对话文本：分泡入队"""
     chunks = pack_bubbles(content)
     if not chunks:
         return
@@ -151,9 +156,34 @@ async def enqueue_chat(
         _SendJob(group_id, user_id, chunks, msg_id, at_user, is_group, memory_tag),
         priority=priority,
     )
-    if group_id not in _running:
-        _running.add(group_id)
-        asyncio.create_task(_worker(group_id, q))
+    _ensure_worker(group_id, q)
+
+
+async def enqueue_image(
+    group_id: str,
+    user_id: str,
+    image_path: str,
+    description: str,
+    msg_id: str,
+    is_group: bool = True,
+):
+    """表情包图片：作为独立 job 排在队列里（自然落在文字气泡之后）"""
+    q = _queues.setdefault(group_id, _GroupQ())
+    q.put(
+        _SendJob(
+            group_id,
+            user_id,
+            [],
+            msg_id,
+            "",
+            is_group,
+            "",
+            image_path=image_path,
+            image_desc=description,
+        ),
+        priority=False,
+    )
+    _ensure_worker(group_id, q)
 
 
 async def _worker(group_id: str, q: _GroupQ):
@@ -166,12 +196,13 @@ async def _worker(group_id: str, q: _GroupQ):
 
 
 async def _deliver_turn(job: _SendJob):
-    print(
-        f"[发送队列] 回合开始: {len(job.chunks)}泡, 等了{time.time() - job.enqueued_at:.1f}s, 首泡={job.chunks[0][:20]!r}"
-    )
     waited = time.time() - job.enqueued_at
     if waited > SEND_JOB_MAX_WAIT:
-        print(f"[发送队列] 丢弃过期任务(等待{waited:.0f}s): {job.chunks[0][:20]!r}")
+        print(f"[发送队列] 丢弃过期任务(等待{waited:.0f}s)")
+        return
+
+    if job.image_path:
+        await _deliver_image(job)
         return
 
     url = (
@@ -188,14 +219,44 @@ async def _deliver_turn(job: _SendJob):
                 + random.uniform(-SEND_PACE_JITTER, SEND_PACE_JITTER)
             )
             await asyncio.sleep(max(0.8, delay))
-        # @ 只挂在首泡；单泡发送（msg_seq=1），气泡各自独立
-        # @ 只挂在首泡；按泡续 msg_seq（同 msg_id 内 1,2,3 递增，否则平台去重报错）
+        # @ 只挂首泡；同 msg_id 内 msg_seq 按泡递增（1,2,3…），否则平台去重报错
         at = job.at_user if (i == 0 and job.is_group) else ""
         await send_split_message(
-            url, chunk, job.msg_id, at_user_id=at, msg_seq_start=i + 1
+            url, chunk, job.msg_id, at_user_id=at, msg_seq_start=_next_seq(job.msg_id)
         )
         await record_message(
             job.group_id, job.user_id, "bot", f"{job.memory_tag}{chunk}"
         )
+    await asyncio.sleep(SEND_TURN_GAP)
 
+
+async def _deliver_image(job: _SendJob):
+    """图片 job：上传 + 发送 + 记忆"""
+    from core.ai import get_token
+    from services.media import send_image as raw_send_image
+    from services.media import upload_image
+
+    token = await get_token()
+    target_id = job.group_id if job.is_group else job.user_id
+    try:
+        file_info = await upload_image(
+            token, target_id, job.image_path, is_group=job.is_group
+        )
+        if file_info:
+            await raw_send_image(
+                token,
+                target_id,
+                file_info,
+                job.msg_id,
+                is_group=job.is_group,
+                msg_seq=_next_seq(job.msg_id),
+            )
+            await record_message(
+                job.group_id,
+                job.user_id,
+                "bot",
+                f"[发送了图片：{job.image_desc[:40]}]",
+            )
+    except Exception as e:
+        print(f"[发送队列] 图片发送失败: {type(e).__name__}: {e}")
     await asyncio.sleep(SEND_TURN_GAP)

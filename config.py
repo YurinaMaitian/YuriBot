@@ -142,3 +142,16 @@ SEND_TURN_GAP = float(os.getenv("SEND_TURN_GAP", "2.0"))  # 回合间换气（�
 SEND_JOB_MAX_WAIT = float(
     os.getenv("SEND_JOB_MAX_WAIT", "120")
 )  # 任务排队超时下限（秒，防msg_id过期）
+
+
+# ========== 表情包配图（二段检索：回复→检索→裁判） ==========
+MEME_JUDGE = os.getenv(
+    "MEME_JUDGE", "light"
+)  # light=免费模型 | main=主模型（更懂幽默但有成本）
+MEME_RECALL_MIN = float(
+    os.getenv("MEME_RECALL_MIN", "0.6")
+)  # 检索召回门槛（低于不送审）
+MEME_MIN_REPLY_LEN = int(
+    os.getenv("MEME_MIN_REPLY_LEN", "5")
+)  # 回复太短不配图（短文本embedding噪声大）
+MEME_COOLDOWN = float(os.getenv("MEME_COOLDOWN", "600"))  # 每群配图冷却（秒）

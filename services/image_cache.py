@@ -63,6 +63,11 @@ async def init_image_cache_table():
             await db.execute(
                 "ALTER TABLE image_cache ADD COLUMN manual INTEGER DEFAULT 0"
             )
+        if "group_id" not in cols:
+            await db.execute(
+                "ALTER TABLE image_cache ADD COLUMN group_id TEXT DEFAULT ''"
+            )
+
         await db.commit()
     await _backfill_types()
 
@@ -97,7 +102,7 @@ async def get_image(filename: str) -> dict | None:
     """查完整状态。created_at 解析为 datetime，失败为 None"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT description, status, fail_count, created_at, type, manual FROM image_cache WHERE filename = ?",
+            "SELECT description, status, fail_count, created_at, type, manual, group_id FROM image_cache WHERE filename = ?",
             (filename,),
         ) as cur:
             row = await cur.fetchone()
@@ -127,21 +132,22 @@ async def get_image(filename: str) -> dict | None:
         "created_at": ts,
         "type": row[4] or "other",
         "manual": bool(row[5]),
+        "group_id": row[6] or "",
     }
 
 
-async def mark_pending(filename: str):
-    """收到图片立刻登记（不等解析）。重解析时清零失败计数、刷新时间戳"""
+async def mark_pending(filename: str, group_id: str = ""):
+    """收到图片立刻登记（不等解析）。重解析时清零失败计数、刷新时间戳、记录来源群"""
     now = datetime.now().isoformat(timespec="seconds")
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO image_cache (filename, description, status, fail_count, created_at)
-            VALUES (?, '', 'pending', 0, ?)
+            INSERT INTO image_cache (filename, description, status, fail_count, created_at, group_id)
+            VALUES (?, '', 'pending', 0, ?, ?)
             ON CONFLICT(filename) DO UPDATE
-            SET status='pending', fail_count=0, description='', created_at=?
+            SET status='pending', fail_count=0, description='', created_at=?, group_id=?
         """,
-            (filename, now, now),
+            (filename, now, group_id, now, group_id),
         )
         await db.commit()
     _wait_events.pop(filename, None)  # 新一轮解析，旧 Event 作废

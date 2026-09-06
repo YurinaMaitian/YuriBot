@@ -176,7 +176,7 @@ def _has_trigger_word(raw_content: str) -> bool:
     return "yuri" in text or bool(_TRIGGER_BOT_RE.search(text))
 
 
-async def _process_images(content: str, images: list[dict]) -> str:
+async def _process_images(content: str, images: list[dict], group_id: str = "") -> str:
     """
     把图片附件替换为 【图片:filename】 占位符，后台异步解析。
     主流程不阻塞，描述在 prompt 组装时从 image_cache 查最新状态替换。
@@ -205,8 +205,7 @@ async def _process_images(content: str, images: list[dict]) -> str:
         # 已 success 的（重复表情包）不动，保住去重
         info = await image_cache.get_image(filename)
         if not (info and info["status"] == "success"):
-            await image_cache.mark_pending(filename)
-
+            await image_cache.mark_pending(filename, group_id)
         asyncio.create_task(describe_image(url, filename, mime, user_text=user_text))
 
     return content
@@ -271,7 +270,7 @@ async def process_event(data: dict):
                 "msg_elements": d.get("msg_elements", []),
             }
         )
-        clean_content = await _process_images(clean_content, images)
+        clean_content = await _process_images(clean_content, images, group_id)
 
         nick = await get_nickname(user_id)
         gname = await get_group_name(group_id)
@@ -320,6 +319,7 @@ async def process_event(data: dict):
                 is_group=True,
                 at_user=user_id,
                 priority=True,
+                trigger_content=clean_content,
             )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
@@ -347,7 +347,7 @@ async def process_event(data: dict):
         base_content = clean_content if is_at_bot else raw_content
         base_content = await normalize_mentions(base_content)
         base_content = _strip_face_tags(base_content)
-        msg_to_record = await _process_images(base_content, images)
+        msg_to_record = await _process_images(base_content, images, group_id)
 
         # 群状态管理
         state = load_state()
@@ -412,6 +412,7 @@ async def process_event(data: dict):
                 is_group=True,
                 at_user=user_id,
                 priority=True,
+                trigger_content=msg_to_record,
             )
             await check_and_update_scene(group_id, user_id, "bot", reply)
 
@@ -426,6 +427,12 @@ async def lifespan(app: FastAPI):
     await init_image_cache_table()
     await init_interject_table()
     await init_collection()
+    from services.vector_store import init_memes_collection
+    from services.meme_store import init_meme_log_table
+
+    await init_memes_collection()
+    await init_meme_log_table()
+
     auto_discover("tools")
     auto_discover("handlers")
 

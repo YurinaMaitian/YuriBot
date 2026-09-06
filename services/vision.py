@@ -1,6 +1,7 @@
 import json
 import base64
 import aiohttp
+import asyncio
 from config import (
     VISION_MODEL_URL,
     VISION_MODEL_KEY,
@@ -137,6 +138,16 @@ async def describe_image(
 
         await image_cache.mark_success(filename, desc, img_type)
         print(f"[Vision识别成功] {filename[:20]} -> {desc[:40]}")
+        # 存实体：全部图进滚动缓存（echo/引用素材，3天），meme 额外永久入库
+        try:
+            from services import meme_store
+
+            await meme_store.save_recent_file(filename, img_bytes)
+            if img_type == "meme":
+                await meme_store.save_meme_file(filename, img_bytes)
+                asyncio.create_task(meme_store.sync_index(filename))
+        except Exception as e:
+            print(f"[图片存档失败] {type(e).__name__}: {e}")
         return desc
 
     except Exception as e:

@@ -263,6 +263,10 @@ async def imgset_cmd(ctx):
     if not t:
         return "❌ 类型必须是：表情包 / 照片 / 截图 / 手绘 / 其他"
     await img_cache.set_manual(fn, img_type=t)
+    from services import meme_store
+
+    asyncio.create_task(meme_store.sync_index(fn))
+
     return f"✅ 已订正 {fn[:12]}… 为【{label}】并锁定（自动重解析不会覆盖）"
 
 
@@ -282,4 +286,8 @@ async def imgdesc_cmd(ctx):
     if err:
         return err
     await img_cache.set_manual(fn, description=desc)
+    from services import meme_store
+
+    asyncio.create_task(meme_store.sync_index(fn))
+
     return f"✅ 已订正 {fn[:12]}… 的描述并锁定"
