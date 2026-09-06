@@ -67,7 +67,8 @@ async def describe_image(
         prompt_text = (
             "提取图片中的所有文字内容，如实转录，不要描述图片外观"
             if _is_ocr_request(user_text)
-            else "一句话描述这张图片的内容"
+            else "先判断图片类型（表情包/照片/截图/手绘/其他），"
+            "以【类型】开头一句话描述（表情包要转录配字）"
         )
 
         headers = {

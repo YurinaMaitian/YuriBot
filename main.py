@@ -4,12 +4,16 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from services.user_manager import get_nickname, get_group_name, normalize_mentions
 
 # 副作用导入：触发 @cmd 装饰器注册
 import handlers.admin  # noqa: F401
 import handlers.chat  # noqa: F401
 import handlers.owner  # noqa: F401
 import tools.latex  # noqa: F401
+
+from config import APP_ID, APP_SECRET, BOT_OPENID, ENABLE_INTERJECT
+from services.interject import maybe_interject, init_interject_table
 
 from config import APP_ID, APP_SECRET, BOT_OPENID
 from handlers.chat import handle_chat
@@ -246,6 +250,8 @@ async def process_event(data: dict):
         # 先去掉 @Bot
         clean_content = _extract_at_content(raw_content)
 
+        clean_content = await normalize_mentions(clean_content)
+
         # 提取 attachments + 引用 + 图片占位（后台解析，不阻塞）
         clean_content, images = _extract_content_with_attachments(
             {
@@ -318,8 +324,11 @@ async def process_event(data: dict):
             }
         )
 
+        clean_content = await normalize_mentions(clean_content)
+
         # 图片占位（后台解析）：@Bot 记清理后内容，免@ 记原始内容
         base_content = clean_content if is_at_bot else raw_content
+        base_content = await normalize_mentions(base_content)
         msg_to_record = await _process_images(base_content, images)
 
         # 群状态管理
@@ -335,6 +344,17 @@ async def process_event(data: dict):
             if not triggered:
                 await record_message(group_id, user_id, "user", msg_to_record)
                 await check_and_update_scene(group_id, user_id, "user", msg_to_record)
+                # 主动插话判断：异步，不阻塞；延续对话/引用场景 judge 先验拉高
+                if ENABLE_INTERJECT:
+                    has_quote = any(
+                        el.get("message_type") == 103
+                        for el in d.get("msg_elements") or []
+                    )
+                    asyncio.create_task(
+                        maybe_interject(
+                            group_id, user_id, msg_to_record, msg_id, has_quote
+                        )
+                    )
                 return
 
         nick = await get_nickname(user_id)
@@ -380,6 +400,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_scenes_table()
     await init_image_cache_table()
+    await init_interject_table()
     await init_collection()
     auto_discover("tools")
     auto_discover("handlers")
@@ -392,6 +413,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(token_refresh_loop())
     asyncio.create_task(scene_scan_loop())
     from services.daily_schedule import schedule_ensure_loop
+
     asyncio.create_task(schedule_ensure_loop())
 
     yield

@@ -10,6 +10,7 @@ from config import (
     HISTORY_HOT_MAX,
     HISTORY_CHAR_BUDGET,
     HISTORY_RECENT_LINES,
+    HISTORY_MERGE_GAP_MIN,
 )
 
 _hot_cache = {}
@@ -38,6 +39,50 @@ def _format_rel_time(msg_time: datetime) -> str:
     elif delta < 7200:
         return "[一小时前] "
     return ""
+
+
+def _merge_fragments(messages: list) -> list:
+    """
+    相邻 + 同发言人 + 间隔 < HISTORY_MERGE_GAP_MIN 分钟 → 合并为一行。
+    行内逐条保留 [HH:MM]，行首相对时间取最新一条（碎片落地的时刻）。
+    仅用于聊天 prompt / judge 历史；情景分割队列不合并（分割器依赖逐条粒度）。
+    """
+    out = []
+    for m in messages:
+        t = m.get("time")
+        if (
+            out
+            and out[-1]["identity"] == m["identity"]
+            and t
+            and out[-1].get("_last_time")
+            and (t - out[-1]["_last_time"]).total_seconds() < HISTORY_MERGE_GAP_MIN * 60
+        ):
+            frag = f"[{t.strftime('%H:%M')}]{m['content']}"
+            out[-1]["content"] += "｜" + frag
+            out[-1]["_last_time"] = t
+            out[-1]["time"] = t  # 相对时间跟随最新碎片
+        else:
+            out.append(
+                {
+                    "identity": m["identity"],
+                    "content": f"[{t.strftime('%H:%M')}]{m['content']}"
+                    if t
+                    else m["content"],
+                    "time": t,
+                    "_last_time": t,
+                }
+            )
+    for o in out:
+        o.pop("_last_time", None)
+    return out
+
+
+def build_merged_lines(messages: list) -> List[str]:
+    """合并碎片 → 带相对时间前缀的文本行（聊天 prompt 与 judge 历史共用）"""
+    return [
+        f"{_format_rel_time(m['time'])}{m['identity']}：{m['content']}"
+        for m in _merge_fragments(messages)
+    ]
 
 
 async def _lazy_load(key: str, group_id: str, user_id: str):
@@ -106,14 +151,11 @@ def get_context(group_id: str, user_id: str) -> List[dict]:
 
 
 async def get_history_text(group_id: str, user_id: str) -> str:
-    """组装带相对时间戳的历史文本。Router 和主 prompt 共用，保证两者看到同一份上下文"""
+    """组装带相对时间戳的历史文本（同发言人碎片已合并）。Router 和主 prompt 共用，保证两者看到同一份上下文"""
     ctx = get_context(group_id, user_id)
     if not ctx:
         return ""
-    history_lines = []
-    for m in ctx:
-        rel = _format_rel_time(m.get("time"))
-        history_lines.append(f"{rel}{m['identity']}：{m['content']}")
+    history_lines = build_merged_lines(ctx)
     all_text = "\n".join(history_lines)
     if len(all_text) < HISTORY_CHAR_BUDGET:
         return all_text

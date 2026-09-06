@@ -99,3 +99,35 @@ INTERJECT_HISTORY_LINES = int(
     os.getenv("INTERJECT_HISTORY_LINES", "10")
 )  # judge 看到的最近消息条数
 INTERJECT_TEMP = float(os.getenv("INTERJECT_TEMP", "0.2"))
+
+
+# ========== 主动插话（无@回复系统） ==========
+ENABLE_INTERJECT = os.getenv("ENABLE_INTERJECT", "true").lower() == "true"
+INTERJECT_HISTORY_LINES = int(os.getenv("INTERJECT_HISTORY_LINES", "10"))
+INTERJECT_TEMP = float(os.getenv("INTERJECT_TEMP", "0.2"))
+INTERJECT_THINKING = (
+    os.getenv("INTERJECT_THINKING", "false").lower() == "true"
+)  # judge 思维链开关（延迟换质量）
+INTERJECT_API_CONCURRENCY = int(
+    os.getenv("INTERJECT_API_CONCURRENCY", "3")
+)  # 全局judge并发上限（保护免费API）
+INTERJECT_WORKER2_BACKLOG = int(
+    os.getenv("INTERJECT_WORKER2_BACKLOG", "3")
+)  # 积压≥N开第2个并行judge（每群硬顶2）
+INTERJECT_BATCH_THRESHOLD = int(
+    os.getenv("INTERJECT_BATCH_THRESHOLD", "6")
+)  # 积压≥N触发批量折叠判断
+INTERJECT_MAX_BATCH = int(
+    os.getenv("INTERJECT_MAX_BATCH", "6")
+)  # 单次批量判断最多含几条
+
+
+# ========== 主动插话（静默门） ==========
+INTERJECT_SILENCE = float(
+    os.getenv("INTERJECT_SILENCE", "5")
+)  # 免@路径静默期基准（秒），实际加±1.5s抖动
+
+# ========== 短期记忆 ==========
+HISTORY_MERGE_GAP_MIN = int(
+    os.getenv("HISTORY_MERGE_GAP_MIN", "3")
+)  # 同发言人相邻消息合并的时间闸门（分钟）
