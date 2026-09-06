@@ -50,7 +50,7 @@ async def myid_cmd(ctx):
     return f"你的 openid：\n`{ctx.user_id}`"
 
 
-@cmd("setnick", desc="[主人] 设置群友昵称")
+@cmd("setnick", desc="[主人] 设置群友昵称", hidden=True)
 async def setnick_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -63,7 +63,7 @@ async def setnick_cmd(ctx):
     return f"✅ 已设置 {target_id[:8]}... 的昵称为：{nickname}"
 
 
-@cmd("lookup", desc="[主人] 查询某人当前昵称")
+@cmd("lookup", desc="[主人] 查询某人当前昵称", hidden=True)
 async def lookup_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -76,7 +76,7 @@ async def lookup_cmd(ctx):
     return f"🔍 {oid[:8]}... 当前昵称：{nick}"
 
 
-@cmd("setgroupname", desc="[主人] 设置群名称")
+@cmd("setgroupname", desc="[主人] 设置群名称", hidden=True)
 async def setgroupname_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -92,7 +92,7 @@ async def setgroupname_cmd(ctx):
     return f"✅ 已设置本群名称为：{name}"
 
 
-@cmd("logs", desc="[主人] 查看最近日志，用法: /logs 30")
+@cmd("logs", desc="[主人] 查看最近日志，用法: /logs 30", hidden=True)
 async def logs_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -143,7 +143,7 @@ async def logs_cmd(ctx):
 from services.state import load_state, save_state
 
 
-@cmd("aton", desc="[主人] 开启回@（被@时回复@回去）")
+@cmd("aton", desc="[主人] 开启回@（被@时回复@回去）", hidden=True)
 async def aton_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -153,7 +153,7 @@ async def aton_cmd(ctx):
     return "✅ 回@已开启，群里被@时会@回去"
 
 
-@cmd("atoff", desc="[主人] 关闭回@")
+@cmd("atoff", desc="[主人] 关闭回@", hidden=True)
 async def atoff_cmd(ctx):
     if not _is_owner(ctx.user_id):
         return "⛔ 你没有权限使用这个指令"
@@ -161,3 +161,13 @@ async def atoff_cmd(ctx):
     st["reply_at_enabled"] = False
     save_state(st)
     return "⏸️ 回@已关闭"
+
+
+@cmd("syncpanel", desc="[主人] 手动同步指令面板到QQ", hidden=True)
+async def syncpanel_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    from services.panel import sync_all_panels
+
+    await sync_all_panels()
+    return "✅ 面板同步已触发，结果看日志"

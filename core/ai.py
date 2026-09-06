@@ -2,7 +2,9 @@ import asyncio
 import os
 import json
 import aiohttp
+from services.http import get_session
 from config import (
+    DATA_DIR,
     MAIN_MODEL_URL,
     MAIN_MODEL_KEY,
     MAIN_MODEL_NAME,
@@ -19,23 +21,25 @@ from config import (
 )
 from core.memory import build_prompt
 
-PERSONA_DIR = "/home/minds/qqbot/data/persona"
+PERSONA_DIR = os.path.join(DATA_DIR, "persona")
 
 _current_token = None
 
 
 async def refresh_token():
     global _current_token
-    async with aiohttp.ClientSession() as session:
-        r = await session.post(
-            TOKEN_URL, json={"appId": APP_ID, "clientSecret": APP_SECRET}
-        )
+    session = get_session()
+    async with session.post(
+        TOKEN_URL,
+        json={"appId": APP_ID, "clientSecret": APP_SECRET},
+        timeout=10,
+    ) as r:
         data = await r.json()
-        if "access_token" not in data:
-            raise Exception(f"Token失败: {data}")
-        _current_token = data["access_token"]
-        print(f"[Token] 已刷新: {_current_token[:10]}...")
-        return _current_token
+    if "access_token" not in data:
+        raise Exception(f"Token失败: {data}")
+    _current_token = data["access_token"]
+    print(f"[Token] 已刷新: {_current_token[:10]}...")
+    return _current_token
 
 
 async def get_token():
@@ -124,47 +128,47 @@ async def get_ai_reply(
         payload["enable_thinking"] = enable_thinking
 
     try:
-        async with aiohttp.ClientSession() as session:
-            for attempt in range(2):
-                try:
-                    async with session.post(
-                        api_url, headers=headers, json=payload, timeout=timeout
-                    ) as r:
-                        raw_text = await r.text()
-                        print(
-                            f"[AI原始返回] 模型:{model}, 状态:{r.status}, 尝试:{attempt + 1}"
-                        )
+        session = get_session()
+        for attempt in range(2):
+            try:
+                async with session.post(
+                    api_url, headers=headers, json=payload, timeout=timeout
+                ) as r:
+                    raw_text = await r.text()
+                    print(
+                        f"[AI原始返回] 模型:{model}, 状态:{r.status}, 尝试:{attempt + 1}"
+                    )
 
-                        if r.status != 200:
-                            print(f"[AI API错误] {raw_text[:200]}")
-                            if attempt == 0:
-                                await asyncio.sleep(0.5)
-                                continue
-                            return "AI服务开小差了，稍后再试"
+                    if r.status != 200:
+                        print(f"[AI API错误] {raw_text[:200]}")
+                        if attempt == 0:
+                            await asyncio.sleep(0.5)
+                            continue
+                        return "AI服务开小差了，稍后再试"
 
-                        data = json.loads(raw_text)
-                        choice = data["choices"][0]
-                        msg = choice.get("message", {})
-                        reply = (msg.get("content") or "").strip()
-                        print(
-                            f"[AI] finish_reason={choice.get('finish_reason')}, 长度={len(reply)}"
-                        )
+                    data = json.loads(raw_text)
+                    choice = data["choices"][0]
+                    msg = choice.get("message", {})
+                    reply = (msg.get("content") or "").strip()
+                    print(
+                        f"[AI] finish_reason={choice.get('finish_reason')}, 长度={len(reply)}"
+                    )
 
-                        if reply:
-                            return reply
+                    if reply:
+                        return reply
 
-                        print("[AI返回空，重试中...]")
-                        await asyncio.sleep(0.5)
+                    print("[AI返回空，重试中...]")
+                    await asyncio.sleep(0.5)
 
-                except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-                    # 超时/网络错误也走重试，不再直接穿透
-                    print(f"[AI网络异常] 尝试{attempt + 1}: {type(e).__name__}")
-                    if attempt == 0:
-                        await asyncio.sleep(0.5)
-                        continue
-                    return "AI服务开小差了，稍后再试"
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                # 超时/网络错误也走重试，不再直接穿透
+                print(f"[AI网络异常] 尝试{attempt + 1}: {type(e).__name__}")
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                    continue
+                return "AI服务开小差了，稍后再试"
 
-            return "……（正在刷手机，没注意看）"
+        return "……（正在刷手机，没注意看）"
 
     except Exception as e:
         print(f"[AI异常] {type(e).__name__}: {e}")

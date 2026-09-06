@@ -23,9 +23,8 @@ async def handle_on(ctx):
     if target is None:
         set_global_state(ctx.state, True)
         return "✅ 全局已开启"
-    else:
-        set_global_state(ctx.state, True)
-        return f"✅ 群已开启"
+    set_group_state(ctx.state, target, True)
+    return "✅ 群已开启"
 
 
 @cmd("off", desc="关闭Bot，用法: /off [群序号]")
@@ -41,12 +40,10 @@ async def handle_off(ctx):
             target = arg
 
     if target is None:
-        set_global_state(ctx.state, True)
+        set_global_state(ctx.state, False)
         return "⏸️ 全局已关闭"
-    else:
-        set_global_state(ctx.state, True)
-
-        return f"⏸️ 群已关闭"
+    set_group_state(ctx.state, target, False)
+    return "⏸️ 群已关闭"
 
 
 @cmd("status", desc="查看Bot状态")

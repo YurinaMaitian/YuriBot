@@ -13,15 +13,19 @@ import tools.latex  # noqa: F401
 
 from config import APP_ID, APP_SECRET, BOT_OPENID
 from handlers.chat import handle_chat
-from core.registry import get_handler, get_cmd_list, auto_discover
-from core.context import CmdContext
+from core.dispatcher import handle_command
+from core.registry import auto_discover
 from core.memory import record_message
 from services.db import init_db
 from services.state import load_state, is_group_enabled, set_group_state
 from services.user_manager import get_nickname, get_group_name
 from services import image_cache
 from services.image_cache import init_image_cache_table
-from utils.scene_manager import check_and_update_scene, init_scenes_table
+from utils.scene_manager import (
+    check_and_update_scene,
+    init_scenes_table,
+    scene_scan_loop,
+)
 from services.vector_store import init_collection
 from core.ai import refresh_token
 from services.actions import send_text
@@ -92,9 +96,6 @@ def _detect_at_bot(content: str):
 
 def _extract_quote(d: dict) -> tuple[str, list[dict]]:
     elements = d.get("msg_elements") or []
-    # print(
-    #     f"[quote_debug] elements数={len(elements)}, 各元素类型={[el.get('message_type') for el in elements]}"
-    # )
     quote_text = ""
     quote_images: list[dict] = []
     for el in elements:
@@ -105,9 +106,6 @@ def _extract_quote(d: dict) -> tuple[str, list[dict]]:
         for a in el.get("attachments") or []:
             if a.get("content_type", "").startswith("image/"):
                 quote_images.append(a)
-    print(
-        f"[quote_debug] quote_text={quote_text[:50]!r}, quote_images={len(quote_images)}个"
-    )
     return quote_text, quote_images
 
 
@@ -163,17 +161,6 @@ def _has_trigger_word(raw_content: str) -> bool:
     return "yuri" in text or bool(_TRIGGER_BOT_RE.search(text))
 
 
-def _is_addressed_to_other(raw_content: str) -> bool:
-    """消息以 @别人（非 @Bot）开头 → 定向消息，不触发。
-    但消息里任何位置 @ 了 Bot 则不算（多人同时@时 Bot 也要接话）"""
-    s = raw_content.strip()
-    if BOT_OPENID and f"<@{BOT_OPENID}>" in s:
-        return False
-    if s.startswith("[@") or s.startswith("<@"):
-        return True
-    return False
-
-
 async def _process_images(content: str, images: list[dict]) -> str:
     """
     把图片附件替换为 【图片:filename】 占位符，后台异步解析。
@@ -199,7 +186,7 @@ async def _process_images(content: str, images: list[dict]) -> str:
         else:
             content += f" {placeholder}"
 
-            # 收到即登记：关闭"发图后毫秒级追问查无此图"的竞态
+        # 收到即登记：关闭"发图后毫秒级追问查无此图"的竞态
         # 已 success 的（重复表情包）不动，保住去重
         info = await image_cache.get_image(filename)
         if not (info and info["status"] == "success"):
@@ -225,11 +212,6 @@ async def process_event(data: dict):
         f"user_id={d.get('author', {}).get('member_openid') or d.get('author', {}).get('id')}"
     )
 
-    # print(f"[完整消息体process_event的] {json.dumps(d, ensure_ascii=False)[:2000]}")
-
-    # if d.get("message_reference"):
-    #   print(f"[引用消息] {json.dumps(d['message_reference'], ensure_ascii=False)}")
-
     # ---------- 私聊 ----------
     if event == "C2C_MESSAGE_CREATE":
         user_id = d["author"]["id"]
@@ -241,35 +223,7 @@ async def process_event(data: dict):
 
         # 命令：打标签进记忆，不进情景（私聊本来就没有情景）
         if content.startswith("/"):
-            await record_message("", user_id, "user", f"[指令] {content}")
-            parts = content.split(maxsplit=1)
-            cmd_name = parts[0][1:]
-            raw = parts[1] if len(parts) > 1 else ""
-            args = raw.split() if raw else []
-
-            handler = get_handler(cmd_name)
-            if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text(
-                    "", user_id, reply, msg_id, is_group=False, memory_tag="[指令] "
-                )
-                return
-
-            ctx = CmdContext(
-                group_id="",
-                user_id=user_id,
-                msg_id=msg_id,
-                is_group=False,
-                cmd=cmd_name,
-                args=args,
-                raw=raw,
-                state=load_state(),
-            )
-            result = await handler(ctx)
-            if isinstance(result, str):
-                await send_text(
-                    "", user_id, result, msg_id, is_group=False, memory_tag="[指令] "
-                )
+            await handle_command(content, user_id, "", msg_id, is_group=False)
             return
 
         # 非命令：进记忆，走 AI
@@ -292,9 +246,13 @@ async def process_event(data: dict):
         # 先去掉 @Bot
         clean_content = _extract_at_content(raw_content)
 
-        # 提取 attachments + 图片占位（后台解析，不阻塞）
+        # 提取 attachments + 引用 + 图片占位（后台解析，不阻塞）
         clean_content, images = _extract_content_with_attachments(
-            {"content": clean_content, "attachments": d.get("attachments", [])}
+            {
+                "content": clean_content,
+                "attachments": d.get("attachments", []),
+                "msg_elements": d.get("msg_elements", []),
+            }
         )
         clean_content = await _process_images(clean_content, images)
 
@@ -315,45 +273,9 @@ async def process_event(data: dict):
 
         # 命令：打标签进记忆，不进情景
         if clean_content.startswith("/"):
-            await record_message(group_id, user_id, "user", f"[指令] {clean_content}")
-            parts = clean_content.split(maxsplit=1)
-            cmd_name = parts[0][1:]
-            raw = parts[1] if len(parts) > 1 else ""
-            args = raw.split() if raw else []
-
-            handler = get_handler(cmd_name)
-            if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text(
-                    group_id,
-                    user_id,
-                    reply,
-                    msg_id,
-                    is_group=True,
-                    memory_tag="[指令] ",
-                )
-                return
-
-            ctx = CmdContext(
-                group_id=group_id,
-                user_id=user_id,
-                msg_id=msg_id,
-                is_group=True,
-                cmd=cmd_name,
-                args=args,
-                raw=raw,
-                state=load_state(),
+            await handle_command(
+                clean_content, user_id, group_id, msg_id, is_group=True
             )
-            result = await handler(ctx)
-            if isinstance(result, str):
-                await send_text(
-                    group_id,
-                    user_id,
-                    result,
-                    msg_id,
-                    is_group=True,
-                    memory_tag="[指令] ",
-                )
             return
 
         # 非命令：进记忆 + 情景
@@ -423,45 +345,9 @@ async def process_event(data: dict):
 
         # 命令：打标签进记忆，不进情景
         if clean_content.startswith("/"):
-            await record_message(group_id, user_id, "user", f"[指令] {clean_content}")
-            parts = clean_content.split(maxsplit=1)
-            cmd_name = parts[0][1:]
-            raw = parts[1] if len(parts) > 1 else ""
-            args = raw.split() if raw else []
-
-            handler = get_handler(cmd_name)
-            if not handler:
-                reply = f"❓ 未知指令: /{cmd_name}，可用: {get_cmd_list()}"
-                await send_text(
-                    group_id,
-                    user_id,
-                    reply,
-                    msg_id,
-                    is_group=True,
-                    memory_tag="[指令] ",
-                )
-                return
-
-            ctx = CmdContext(
-                group_id=group_id,
-                user_id=user_id,
-                msg_id=msg_id,
-                is_group=True,
-                cmd=cmd_name,
-                args=args,
-                raw=raw,
-                state=load_state(),
+            await handle_command(
+                clean_content, user_id, group_id, msg_id, is_group=True
             )
-            result = await handler(ctx)
-            if isinstance(result, str):
-                await send_text(
-                    group_id,
-                    user_id,
-                    result,
-                    msg_id,
-                    is_group=True,
-                    memory_tag="[指令] ",
-                )
             return
 
         # 非命令：进记忆 + 情景，走 AI（用带图片占位的 msg_to_record）
@@ -497,9 +383,13 @@ async def lifespan(app: FastAPI):
     await init_collection()
     auto_discover("tools")
     auto_discover("handlers")
-    asyncio.create_task(token_refresh_loop())
-    from utils.scene_manager import scene_scan_loop
 
+    # 注册完成后跑自检（必须在 auto_discover 之后，否则注册表还没填）
+    from services.selfcheck import run_self_check
+
+    run_self_check()
+
+    asyncio.create_task(token_refresh_loop())
     asyncio.create_task(scene_scan_loop())
 
     yield

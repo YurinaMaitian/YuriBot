@@ -1,7 +1,9 @@
 import os
 import aiosqlite
 
-DB_DIR = "/home/minds/qqbot/data"
+from config import DATA_DIR
+
+DB_DIR = DATA_DIR
 DB_PATH = os.path.join(DB_DIR, "bot.db")
 
 

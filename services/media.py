@@ -1,5 +1,6 @@
 import base64
 import aiohttp
+from services.http import get_session
 
 
 async def upload_image(
@@ -17,14 +18,14 @@ async def upload_image(
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     payload = {"file_type": 1, "file_data": img_base64, "srv_send_msg": False}
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(upload_url, headers=headers, json=payload) as r:
-            data = await r.json()
-            if "file_info" in data:
-                return data["file_info"]
-            else:
-                print(f"[上传图片失败] {data}")
-                return None
+    session = get_session()
+    async with session.post(upload_url, headers=headers, json=payload, timeout=30) as r:
+        data = await r.json()
+        if "file_info" in data:
+            return data["file_info"]
+        else:
+            print(f"[上传图片失败] {data}")
+            return None
 
 
 async def send_image(
@@ -44,8 +45,8 @@ async def send_image(
         "media": {"file_info": file_info},
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as r:
-            result = await r.json()
-            print(f"[发送图片] 状态:{r.status}, 返回:{result}")
-            return result
+    session = get_session()
+    async with session.post(url, headers=headers, json=payload, timeout=30) as r:
+        result = await r.json()
+        print(f"[发送图片] 状态:{r.status}, 返回:{result}")
+        return result

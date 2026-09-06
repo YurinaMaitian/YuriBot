@@ -2,7 +2,9 @@ import json
 import os
 from datetime import datetime
 
-SCHEDULE_PATH = "/home/minds/qqbot/data/schedule.json"
+from config import DATA_DIR
+
+SCHEDULE_PATH = os.path.join(DATA_DIR, "schedule.json")
 
 
 def load_schedule():
@@ -13,6 +15,7 @@ def load_schedule():
 
 
 def get_current_scene() -> str:
+    """当前时段在干嘛（供主 prompt 的【现在】块引用，文案由 schedule.json 决定）"""
     schedule = load_schedule()
     now = datetime.now()
     hour = now.hour
@@ -31,14 +34,3 @@ def get_current_scene() -> str:
                 return desc
 
     return "闲着，不知道在干嘛"
-
-
-def build_context(user_id: str, content: str, user_persona: str = "") -> str:
-    lines = []
-    scene = get_current_scene()
-    lines.append(f"你现在{scene}。")
-    if user_persona:
-        lines.append(f"对方是{user_persona}。")
-    lines.append(f'群友说："{content}"')
-    lines.append("直接回复，不要解释你在干嘛。像刷手机时顺手回消息那样自然。")
-    return "\n".join(lines)

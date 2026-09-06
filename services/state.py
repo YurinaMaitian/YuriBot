@@ -1,7 +1,9 @@
 import json
 import os
 
-STATE_FILE = "/home/minds/qqbot/data/bot_state.json"
+from config import DATA_DIR
+
+STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
 _state_cache = None
 
 

@@ -34,25 +34,36 @@ def _pick_action(delta: float) -> str:
 
 async def _wait_for_images(
     group_id: str, user_id: str, filenames: list, msg_id: str, is_group: bool
-) -> tuple[float, str] | None:
+) -> tuple[float, str, list[str]] | None:
     """
     等待被引用的图片解析完成。
-    返回 (等待秒数, 动作标签)；None = 静默丢弃（超龄/超时）。
+    返回 (等待秒数, 动作标签, 成功解析的文件名列表)；
+    None = 引用的图全部不可用（超龄/超时），调用方静默丢弃整条消息。
+    部分图失败时不再丢弃整句，只跳过坏图（调用方在 prompt 里注明）。
     """
     start = time.time()
     need_wait = []
+    resolved = []
 
     for fn in filenames:
         info = await image_cache.get_image(fn)
-        if not info or info["status"] in ("success", "blocked"):
+        if info and info["status"] == "success":
+            resolved.append(fn)
+            continue
+        if info and info["status"] == "blocked":
             continue
         age = (
-            (time.time() - info["created_at"].timestamp()) if info["created_at"] else 0
+            (time.time() - info["created_at"].timestamp())
+            if info and info["created_at"]
+            else 0
         )
         if age > IMAGE_WAIT_MAX:
-            print(f"[图片等待] {fn} 超龄 {age:.0f}s，静默丢弃")
-            return None
+            print(f"[图片等待] {fn} 超龄 {age:.0f}s，跳过")
+            continue
         need_wait.append(fn)
+
+    if not need_wait and not resolved:
+        return None  # 引用的图全不可用，整条丢弃（维持拟人"忘了回复"）
 
     action_tag = ""
     if need_wait and ENABLE_IMAGE_PLACEHOLDER:
@@ -72,17 +83,26 @@ async def _wait_for_images(
     for fn in need_wait:
         ev = await image_cache.subscribe(fn)
         if ev is None:
+            # 订阅时已终态，补查一次（可能刚好解析完）
+            info = await image_cache.get_image(fn)
+            if info and info["status"] == "success":
+                resolved.append(fn)
             continue
         try:
             await asyncio.wait_for(ev.wait(), timeout=IMAGE_WAIT_TIMEOUT)
         except asyncio.TimeoutError:
-            # 超时后再确认一次状态（防 Event 丢失）
             info = await image_cache.get_image(fn)
-            if not (info and info["status"] == "success"):
-                print(f"[图片等待超时] {fn}")
-                return None
+            if info and info["status"] == "success":
+                resolved.append(fn)  # Event 丢失兜底：超时瞬间刚好完成
+            else:
+                print(f"[图片等待超时] {fn}，跳过这张图")
+            continue
+        # 正常唤醒，二次确认结果
+        info = await image_cache.get_image(fn)
+        if info and info["status"] == "success":
+            resolved.append(fn)
 
-    return (time.time() - start, action_tag)
+    return (time.time() - start, action_tag, resolved)
 
 
 async def handle_chat(
@@ -124,13 +144,14 @@ async def handle_chat(
     plan = await route(content, history_text)
 
     # 2. 有待解析的图片引用 → 占位动作 + 异步等待
+    # 2. 有待解析的图片引用 → 占位动作 + 异步等待
     referenced = plan.get("referenced_images") or []
-    delta, action = 0.0, ""
+    delta, action, resolved = 0.0, "", []
     if referenced:
         result = await _wait_for_images(group_id, user_id, referenced, msg_id, is_group)
         if result is None:
             return None  # 静默丢弃
-        delta, action = result
+        delta, action, resolved = result
 
     # 3. 组装 prompt 并调用主模型
     prompt = await build_prompt(
@@ -145,6 +166,12 @@ async def handle_chat(
         if action:
             prompt += f"\n【动作状态】你的动作是：{action}"
         prompt += "\n接着这个动作自然回复，不要解释你在干嘛。"
+
+    if referenced and len(resolved) < len(referenced):
+        prompt += (
+            f"\n\n【系统提示】群友引用的图中，有 {len(referenced) - len(resolved)} 张"
+            "没能看清（解析超时），回复时可以自然带过或请对方重发，不要硬编内容。"
+        )
 
     return await get_ai_reply(
         content,

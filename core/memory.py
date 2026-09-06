@@ -83,7 +83,7 @@ async def record_message(group_id: str, user_id: str, speaker: str, content: str
     if key not in _hot_cache or len(_hot_cache[key]) == 0:
         await _lazy_load(key, group_id, user_id)
     if key not in _hot_cache:
-        _hot_cache[key] = deque(maxlen=50)
+        _hot_cache[key] = deque(maxlen=HISTORY_HOT_MAX)
 
     from services.user_manager import get_nickname
 

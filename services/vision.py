@@ -9,6 +9,7 @@ from config import (
     VISION_MODEL_TEMP,
 )
 from services import image_cache
+from services.http import get_session
 
 # 同图并发解析防护（消息去重漏网时的兜底）
 _inflight: set[str] = set()
@@ -51,14 +52,14 @@ async def describe_image(
 
     await image_cache.mark_pending(filename)
     _inflight.add(filename)
+    session = get_session()
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url, timeout=10) as r:
-                if r.status != 200:
-                    print(f"[Vision下载失败] {r.status} {filename[:20]}")
-                    await image_cache.mark_failed(filename)
-                    return "一张图片"
-                img_bytes = await r.read()
+        async with session.get(image_url, timeout=10) as r:
+            if r.status != 200:
+                print(f"[Vision下载失败] {r.status} {filename[:20]}")
+                await image_cache.mark_failed(filename)
+                return "一张图片"
+            img_bytes = await r.read()
 
         img_base64 = base64.b64encode(img_bytes).decode()
         mime = content_type or "image/jpeg"
@@ -92,15 +93,14 @@ async def describe_image(
             "enable_thinking": False,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                VISION_MODEL_URL, headers=headers, json=payload, timeout=30
-            ) as r:
-                if r.status != 200:
-                    print(f"[Vision API错误] {r.status} {(await r.text())[:200]}")
-                    await image_cache.mark_failed(filename)
-                    return "一张图片"
-                data = await r.json()
+        async with session.post(
+            VISION_MODEL_URL, headers=headers, json=payload, timeout=30
+        ) as r:
+            if r.status != 200:
+                print(f"[Vision API错误] {r.status} {(await r.text())[:200]}")
+                await image_cache.mark_failed(filename)
+                return "一张图片"
+            data = await r.json()
 
         desc = (data["choices"][0].get("message", {}).get("content") or "").strip()
         if not desc:

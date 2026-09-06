@@ -86,3 +86,9 @@ SCENE_SCAN_INTERVAL = int(os.getenv("SCENE_SCAN_INTERVAL", "30"))  # 后台扫�
 
 # ========== B站解析 ==========
 BILI_COOKIE = os.getenv("BILI_COOKIE", "")  # SESSDATA=...; bili_jct=...; buvid3=...
+
+# ========== 数据目录 ==========
+# 统一数据出口：db/state/scene/persona 全部挂这里。
+# 换机器或换用户时只需改 .env 里的 DATA_DIR，不再四处改代码。
+DATA_DIR = os.getenv("DATA_DIR", "/home/minds/qqbot/data")
+os.makedirs(DATA_DIR, exist_ok=True)
