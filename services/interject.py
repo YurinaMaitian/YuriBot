@@ -71,7 +71,8 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 - addressee 是 someone:别人 → 默认 false（别抢话）；只有那句话明显也抛给了她时才 true
 - addressee 是 everyone → 她可能举手，有话接就 true
 - addressee 是 yuri → 通常该回，但有两条例外：
-  ① 她在睡觉/上课时 → 除非被直接喊名字，否则倾向 false（被吵醒了最多敷衍一句）
+  ① 她在睡觉/上课，且她没在这个话题里 → 装没听见；
+     但她正在参与这个话题（她刚问过、猜过相关内容）→ 该回
   ② 她刚连续发过言（≥2条）且这条没点名她 → 倾向 false（让人类把话说完，别句句都接）
 - addressee 是 none → 按上面的判断标准
 
@@ -87,7 +88,13 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 示例4：
 群聊：YuriBot: 这是bfnz，就是逼飞奶炸 / 麦田: 你怎么能这么粗俗，直接说出那个词 → {"addressee":"yuri","reply":true,"reason":"在评价她刚说的话，必须接"}
 示例5：
-群聊：YuriBot: （刚才的发言） / 麦田: oi → {"addressee":"yuri","reply":true,"reason":"喊她回应，在叫她"}"""
+群聊：YuriBot: （刚才的发言） / 麦田: oi → {"addressee":"yuri","reply":true,"reason":"喊她回应，在叫她"}
+示例6：
+群聊：YuriBot: 这摩托太子款？排量多大的 / 军师: 太子个锤子，这是张雪机车 → {"addressee":"yuri","reply":true,"reason":"纠正她的错，她在聊这个话题必须接"}
+示例7：
+群聊：YuriBot: （ unrelated 的上一条） / 群友: （课堂话题外的新问题） → {"addressee":"yuri","reply":false,"reason":"她在上课且没在聊这个，装没听见"}
+"""
+
 
 CONTINUATION_NOTE = (
     "\n\n（注意：这是她刚发过言后的延续对话，或群友引用了她的话，"
@@ -336,7 +343,7 @@ async def _judge_one(item: _JudgeItem):
         f"【新消息】{current_line}\n\n"
         "按步骤判断她会不会想接话。"
     )
-        # 情境自觉提示：连发计数 + 作息状态（比冷却聪明——让她自己判断，不是外部禁令）
+    # 情境自觉提示：连发计数 + 作息状态（比冷却聪明——让她自己判断，不是外部禁令）
     streak = 0
     for m in reversed(ctx[:-1]):
         if m["speaker"] == "bot":
@@ -353,6 +360,12 @@ async def _judge_one(item: _JudgeItem):
         extra.append(f"她现在在{scene_text}，没被直接喊名字就装没听见")
     if extra:
         judge_input += "\n\n（" + "；".join(extra) + "）"
+
+    from config import MOOD_AIR_ENABLED
+    from services import mood_air
+
+    if MOOD_AIR_ENABLED and mood_air.get_register(item.group_id) == "solemn":
+        extra.append("当前气氛沉重（有群友难过），没被直接点名就保持沉默")
 
     if continuation:
         judge_input += "\n\n（注意：上一条消息就是她刚发的，这条消息很可能是对她说的或要她回应的。）"

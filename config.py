@@ -155,3 +155,6 @@ MEME_MIN_REPLY_LEN = int(
     os.getenv("MEME_MIN_REPLY_LEN", "5")
 )  # 回复太短不配图（短文本embedding噪声大）
 MEME_COOLDOWN = float(os.getenv("MEME_COOLDOWN", "600"))  # 每群配图冷却（秒）
+
+# ========== 气氛站（shadow 模式：先记录不消费，验证后再开闸） ==========
+MOOD_AIR_ENABLED = os.getenv("MOOD_AIR_ENABLED", "true").lower() == "true"

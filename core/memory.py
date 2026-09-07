@@ -11,6 +11,7 @@ from config import (
     HISTORY_CHAR_BUDGET,
     HISTORY_RECENT_LINES,
     HISTORY_MERGE_GAP_MIN,
+    MOOD_AIR_ENABLED,
 )
 
 _hot_cache = {}
@@ -212,6 +213,14 @@ async def build_prompt(
 
     lines = []
 
+    from services import mood_air
+
+    mood_air.set_register(group_id or f"c2c:{user_id}", plan.get("register", "normal"))
+    if plan.get("register") == "solemn" and MOOD_AIR_ENABLED:
+        lines.append(
+            "【气氛】有群友正在难过。收起所有梗和表情包，话少、认真、陪着，别开玩笑。"
+        )
+
     if plan.get("time"):
         scene_text = get_current_scene()
         # 当天心情追加（日程文件提供；无日程则只有活动）
@@ -220,10 +229,10 @@ async def build_prompt(
         mood = get_today_mood()
         if mood:
             lines.append(f"【现在】{scene_text}。今天心情{mood}")
-
         else:
             lines.append(f"【现在】{scene_text}")
 
+        # 场景行为调制：作息状态决定说话方式（judge 管说不说，这里管怎么说）
         from datetime import datetime as _dt
 
         _h = _dt.now().hour
@@ -231,6 +240,8 @@ async def build_prompt(
             lines.append(
                 "（现在很晚了。被搭话就短回或装睡，一两句为止；被直接喊名字才认真回。）"
             )
+        elif any(k in scene_text for k in ("上课", "学校", "晚自习")):
+            lines.append("（你在上课，回简短点，长聊等下课。）")
 
     if plan.get("preference"):
         prefs = await get_relevant_preferences(current_msg)

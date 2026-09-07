@@ -92,6 +92,13 @@ async def meme_tool_loop(
     """求图协议：检索 → 二次调用点选 → 入队发送。文字气泡已先行。
     query：检索用查询词，默认=request（兜底场景传她的话更合适）"""
     try:
+        from config import MOOD_AIR_ENABLED
+        from services import mood_air
+
+        if MOOD_AIR_ENABLED and mood_air.get_register(group_id) == "solemn":
+            print("[表情包] 气氛沉重，抑制发表情包")
+            return
+
         vector = await embed_text((query or request)[:100])
         # 显式求图，门槛放低（她都开口要了，候选差点也给她挑）
         cands = [
