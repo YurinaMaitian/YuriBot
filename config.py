@@ -17,7 +17,7 @@ MAIN_MODEL_URL = os.getenv(
 )
 MAIN_MODEL_KEY = os.getenv("MAIN_MODEL_KEY", "")
 MAIN_MODEL_NAME = os.getenv("MAIN_MODEL_NAME", "deepseek-chat")
-MAIN_MODEL_MAX_TOKENS = int(os.getenv("MAIN_MODEL_MAX_TOKENS", "120"))
+MAIN_MODEL_MAX_TOKENS = int(os.getenv("MAIN_MODEL_MAX_TOKENS", "250"))
 MAIN_MODEL_TEMP = float(os.getenv("MAIN_MODEL_TEMP", "0.8"))
 
 # ========== 轻量模型（Router / 摘要 / 日记） ==========

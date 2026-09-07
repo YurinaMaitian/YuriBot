@@ -220,7 +220,7 @@ async def _summarize(msgs: list[dict]) -> str:
         api_key=LIGHT_MODEL_KEY,
         enable_thinking=False,
     )
-    if not summary or "没听见" in summary or "开小差" in summary:
+    if not summary:
         summary = "群友聊天"
     for prefix in ("会议记录：", "记录：", "摘要：", "总结："):
         if summary.startswith(prefix):

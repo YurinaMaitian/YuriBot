@@ -75,6 +75,9 @@ async def send_split_message(
                     print(f"[发送seq{seq}] 失败:{r.status} {str(resp)[:150]}")
                     # 平台已有同(msg_id,msg_seq)消息：视为送达，不重试不降级
                     if resp.get("err_code") == 40054005:
+                        print(
+                            f"[警告] seq{seq} 撞车(40054005)，可能丢消息: {str(resp)[:100]}"
+                        )
                         break
                     # markdown 通道不可用（无权限/模板被拒）→ 降级纯文本发内容，丢弃@
                     if use_markdown_at and r.status in (400, 403, 404):

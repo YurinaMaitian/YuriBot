@@ -144,7 +144,7 @@ async def get_ai_reply(
                         if attempt == 0:
                             await asyncio.sleep(0.5)
                             continue
-                        return "AI服务开小差了，稍后再试"
+                        return None
 
                     data = json.loads(raw_text)
                     choice = data["choices"][0]
@@ -166,13 +166,13 @@ async def get_ai_reply(
                 if attempt == 0:
                     await asyncio.sleep(0.5)
                     continue
-                return "AI服务开小差了，稍后再试"
+                return None
 
-        return "……（正在刷手机，没注意看）"
+        return None
 
     except Exception as e:
         print(f"[AI异常] {type(e).__name__}: {e}")
         import traceback
 
         traceback.print_exc()
-        return "AI出错了"
+        return None

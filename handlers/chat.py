@@ -5,7 +5,6 @@ from core.ai import get_ai_reply
 from core.router import route
 from core.memory import get_history_text, build_prompt
 from services import image_cache
-from services.actions import send_text
 from config import (
     IMAGE_WAIT_TIMEOUT,
     IMAGE_WAIT_MAX,
@@ -70,12 +69,15 @@ async def _wait_for_images(
         now = time.time()
         if now - _last_action_time.get(group_id, 0) > IMAGE_ACTION_COOLDOWN:
             action_tag = _pick_action(0)
-            await send_text(
+            from services.sender import enqueue_chat  # 队列内会带 memory_tag 记记忆
+
+            await enqueue_chat(
                 group_id,
                 user_id,
                 action_tag,
                 msg_id,
                 is_group=is_group,
+                priority=True,  # 插队首，先于正常回复发出
                 memory_tag="[动作] ",
             )
             _last_action_time[group_id] = now

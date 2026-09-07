@@ -96,11 +96,6 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 """
 
 
-CONTINUATION_NOTE = (
-    "\n\n（注意：这是她刚发过言后的延续对话，或群友引用了她的话，"
-    "同等条件下倾向 reply=true。但若消息点名的是其他群友，仍以'别抢话'为准。）"
-)
-
 BATCH_SUFFIX = """
 
 【批量模式】上面的【待判消息】是 N 条积压消息（编号1-N）。逐条独立判断哪些值得她回，
@@ -190,6 +185,8 @@ async def _judge_lines(ctx: list) -> list:
 
 def _parse_judge(raw: str) -> tuple[bool, str, str]:
     """返回 (reply, reason, addressee)"""
+    if not raw:
+        return False, "空响应", ""
 
     def _loads(s: str):
         m = re.search(r"\{[^{}]*\}", s)
@@ -293,7 +290,7 @@ async def _log(
             )
             await db.commit()
     except Exception as e:
-        print(f"[插话日志失败] {type(e).__name__}: {e}")
+        print(f"[接话日志失败] {type(e).__name__}: {e}")
 
 
 def _schedule_reply(item: _JudgeItem, delay: float = 1.5):
@@ -343,6 +340,9 @@ async def _judge_one(item: _JudgeItem):
         f"【新消息】{current_line}\n\n"
         "按步骤判断她会不会想接话。"
     )
+    from config import MOOD_AIR_ENABLED
+    from services import mood_air
+
     # 情境自觉提示：连发计数 + 作息状态（比冷却聪明——让她自己判断，不是外部禁令）
     streak = 0
     for m in reversed(ctx[:-1]):
@@ -358,21 +358,16 @@ async def _judge_one(item: _JudgeItem):
         extra.append(f"她已经连续发了{streak}条，这条没点名她名字的话她倾向先潜水")
     if any(k in scene_text for k in ("睡觉", "上课")):
         extra.append(f"她现在在{scene_text}，没被直接喊名字就装没听见")
+    # 气氛站消费端：solemn 时未被直接点名就保持沉默（须在 judge_input 拼接前 append）
+    if MOOD_AIR_ENABLED and mood_air.get_register(item.group_id) == "solemn":
+        extra.append("当前气氛沉重（有群友难过），没被直接点名就保持沉默")
     if extra:
         judge_input += "\n\n（" + "；".join(extra) + "）"
 
-    from config import MOOD_AIR_ENABLED
-    from services import mood_air
-
-    if MOOD_AIR_ENABLED and mood_air.get_register(item.group_id) == "solemn":
-        extra.append("当前气氛沉重（有群友难过），没被直接点名就保持沉默")
-
-    if continuation:
-        judge_input += "\n\n（注意：上一条消息就是她刚发的，这条消息很可能是对她说的或要她回应的。）"
     raw = await _call_judge(system, judge_input)
     reply, reason, addressee = _parse_judge(raw)
     print(
-        f"[插话] judge: reply={reply}, addressee={addressee}, "
+        f"[接话] judge: reply={reply}, addressee={addressee}, "
         f"reason={reason}, msg={item.content[:30]!r}"
     )
     await _log(
@@ -476,7 +471,7 @@ async def _silence_gate(key: tuple, item: _JudgeItem, delay: float):
     except asyncio.CancelledError:
         return
     except Exception as e:
-        print(f"[插话静默门] {type(e).__name__}: {e}")
+        print(f"[接话静默门] {type(e).__name__}: {e}")
 
 
 async def maybe_interject(
@@ -503,4 +498,4 @@ async def maybe_interject(
         task = asyncio.create_task(_silence_gate(key, item, delay))
         _pending_silence[key] = (item, task)
     except Exception as e:
-        print(f"[插话] {type(e).__name__}: {e}")
+        print(f"[接话] {type(e).__name__}: {e}")
