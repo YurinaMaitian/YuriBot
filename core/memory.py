@@ -220,8 +220,17 @@ async def build_prompt(
         mood = get_today_mood()
         if mood:
             lines.append(f"【现在】{scene_text}。今天心情{mood}")
+
         else:
             lines.append(f"【现在】{scene_text}")
+
+        from datetime import datetime as _dt
+
+        _h = _dt.now().hour
+        if _h >= 23 or _h < 6:
+            lines.append(
+                "（现在很晚了。被搭话就短回或装睡，一两句为止；被直接喊名字才认真回。）"
+            )
 
     if plan.get("preference"):
         prefs = await get_relevant_preferences(current_msg)

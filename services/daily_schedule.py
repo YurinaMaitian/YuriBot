@@ -26,17 +26,23 @@ EVENT_PROBABILITY = 0.35
 GENERATE_SYSTEM = """你是 YuriBot 的日程规划器。根据人设背景和今日骨架，生成她今天的日程。
 
 硬性规则：
-1. blocks 必须覆盖 0-24 全天，按 start 升序、相邻不重叠；禁止跨天时段（不要写 23-2，深夜写成 0-2）start/end 一律是 0-23 的整数小时，绝不能用分钟
+1. blocks 必须覆盖 0-24 全天，按 start 升序、相邻不重叠；禁止跨天时段（不要写 23-2，深夜写成 0-2）
+   start/end 一律是 0-23 的整数小时，绝不能用分钟
 2. 23:00 到次日 7:00 前后必须是睡觉（可微调 ±30 分钟）
 3. 活动地点必须符合人设背景（城市/学校/通勤），不得发明背景中没有的新地点、新人物、新设定
-4. activity ≤10字；note ≤15字，是"在做什么/什么状态"的具体细节，无内容时为空字符串
-5. 按 {event_hint} 的概率决定是否生成 events：生成时恰好 1 个，落在非睡觉时段，desc ≤20字（具体事件），mood ≤5字（事件带来的心情）
-6. mood 是全天整体心情 ≤5字，不得与 events 矛盾
-7. 只输出严格 JSON，不要解释、不要 markdown 代码块
+4. activity ≤10字；在学校的大段时段拆成 2~3 段（如 上课/课间/午休），不要一块"上课"糊 8 小时
+5. note ≤15字，是她此刻的具体状态、小动作或内心OS——像偷拍镜头，不像档案。
+   ✅好note：地铁上打瞌睡 / 课间偷刷手机 / 草稿纸上画小人 / 排队等微波炉
+   ❌坏note：数学语文偏强 / 回家部 / 成绩中上游（这些是档案，抄进来算错误）
+   实在想不出就留空字符串
+6. events：按 {event_hint} 的概率生成，恰好 1 个，20字内具体事件。
+   events 必须与所在时段兼容：上课时段只能是校园里的事（小测/换座位/体育课），
+   宅家时段才是补番/游戏/谷子相关。不兼容就不生成
+7. mood 是全天整体心情 ≤8字，带一点具体由头更好（"周一综合征犯困"优于"平静"），不得与 events 矛盾
+8. 只输出严格 JSON，不要解释、不要 markdown 代码块
 
 输出格式：
 {"mood":"...","events":[{"start":15,"end":16,"desc":"...","mood":"..."}],"blocks":[{"start":0,"end":7,"activity":"睡觉","note":""},...]}"""
-
 # 防并发重复生成：date_str 集合
 _inflight: set[str] = set()
 
@@ -138,8 +144,21 @@ def _validate(data: dict) -> tuple[bool, str]:
                     "mood": str(ev.get("mood", "") or "")[:10],
                 }
             )
-    data["events"] = events[:1]
-
+    # 事件与所在时段的 activity 粗校验：上课/学校时段不允许宅家事件
+    _SCHOOL_KW = ("上课", "学校", "晚自习", "自习")
+    _HOME_KW = ("补番", "游戏", "谷子", "番", "宅", "漫画", "同", "打机")
+    ok_events = []
+    for e in events:
+        act = ""
+        for b in kept:
+            if b["start"] <= e["start"] < b["end"]:
+                act = b["activity"]
+                break
+        if any(k in act for k in _SCHOOL_KW) and any(k in e["desc"] for k in _HOME_KW):
+            notes.append(f"丢弃不兼容事件 {e['start']}-{e['end']}:{e['desc'][:12]}")
+            continue
+        ok_events.append(e)
+    data["events"] = ok_events[:1]
     mood = str(data.get("mood", "") or "").strip()
     data["mood"] = (mood[:10] if mood.lower() != "none" else "") or "还行"
     return True, "; ".join(notes) if notes else ""

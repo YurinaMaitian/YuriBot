@@ -70,7 +70,9 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 第二步，决定 reply：
 - addressee 是 someone:别人 → 默认 false（别抢话）；只有那句话明显也抛给了她时才 true
 - addressee 是 everyone → 她可能举手，有话接就 true
-- addressee 是 yuri → 必须 true（被点到了不能沉默）；请求超出能力也 true——回应"办不到"或变相帮忙，而不是装死
+- addressee 是 yuri → 通常该回，但有两条例外：
+  ① 她在睡觉/上课时 → 除非被直接喊名字，否则倾向 false（被吵醒了最多敷衍一句）
+  ② 她刚连续发过言（≥2条）且这条没点名她 → 倾向 false（让人类把话说完，别句句都接）
 - addressee 是 none → 按上面的判断标准
 
 输出严格 JSON，不要解释：
@@ -334,6 +336,24 @@ async def _judge_one(item: _JudgeItem):
         f"【新消息】{current_line}\n\n"
         "按步骤判断她会不会想接话。"
     )
+        # 情境自觉提示：连发计数 + 作息状态（比冷却聪明——让她自己判断，不是外部禁令）
+    streak = 0
+    for m in reversed(ctx[:-1]):
+        if m["speaker"] == "bot":
+            streak += 1
+        else:
+            break
+    scene_text = get_current_scene()
+    extra = []
+    if continuation:
+        extra.append("上一条消息就是她刚发的，这条很可能是对她说的")
+    if streak >= 2:
+        extra.append(f"她已经连续发了{streak}条，这条没点名她名字的话她倾向先潜水")
+    if any(k in scene_text for k in ("睡觉", "上课")):
+        extra.append(f"她现在在{scene_text}，没被直接喊名字就装没听见")
+    if extra:
+        judge_input += "\n\n（" + "；".join(extra) + "）"
+
     if continuation:
         judge_input += "\n\n（注意：上一条消息就是她刚发的，这条消息很可能是对她说的或要她回应的。）"
     raw = await _call_judge(system, judge_input)
