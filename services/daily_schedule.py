@@ -205,6 +205,7 @@ async def _generate(date_str: str, weekday: int):
                 api_key=LIGHT_MODEL_KEY,
                 timeout=60,
                 enable_thinking=False,
+                tag="schedule",
             )
             data = _extract_json(raw)
             if data is None:

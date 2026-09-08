@@ -197,6 +197,7 @@ async def route(user_msg: str, history: str = "") -> dict:
             api_key=LIGHT_MODEL_KEY,
             timeout=30,
             enable_thinking=False,
+            tag="router",
         )
         plan = _parse_router_json(raw)
         if plan:

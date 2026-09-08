@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import time
 import aiohttp
 from services.http import get_session
 from config import (
@@ -70,6 +71,38 @@ def load_persona():
 SYSTEM_PROMPT = load_persona()
 
 
+def _log_ai_call(
+    tag: str,
+    model: str,
+    ok: bool,
+    latency_ms: float,
+    usage: dict,
+    finish_reason: str,
+    err: str = "",
+):
+    """JSON 行指标：journalctl 可见 + 落盘聚合。tag 用于归因到业务环节。"""
+    rec = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "tag": tag,
+        "model": model,
+        "ok": ok,
+        "latency_ms": round(latency_ms),
+        "finish_reason": finish_reason,
+        "prompt_tokens": (usage or {}).get("prompt_tokens"),
+        "completion_tokens": (usage or {}).get("completion_tokens"),
+        "err": err[:80],
+    }
+    line = json.dumps(rec, ensure_ascii=False)
+    print(f"[AI指标] {line}")
+    try:
+        d = os.path.join(DATA_DIR, "metrics")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "ai_calls.jsonl"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
 async def get_ai_reply(
     user_message: str,
     user_id: str = "",
@@ -83,14 +116,16 @@ async def get_ai_reply(
     prompt_override: str = None,
     timeout: int = 15,
     enable_thinking: bool = None,
-) -> str:
+    tag: str = "chat",
+) -> str | None:
     """
     统一 AI 调用入口。
     不传 model/api_url/api_key 时，默认使用主模型（DeepSeek）。
     传了则使用指定模型（如硅基流动的 Qwen3.5-4B）。
+    失败返回 None（错误不外泄，由调用方决定丢弃/重试/降级）。
+    tag：业务环节标签，仅用于指标归因。
     """
-    # if not user_message or not user_message.strip():
-    #     return "……（没听见）"
+    t0 = time.monotonic()
 
     # 默认主模型
     if model is None:
@@ -127,6 +162,9 @@ async def get_ai_reply(
     if enable_thinking is not None:
         payload["enable_thinking"] = enable_thinking
 
+    def _elapsed():
+        return (time.monotonic() - t0) * 1000
+
     try:
         session = get_session()
         for attempt in range(2):
@@ -144,17 +182,21 @@ async def get_ai_reply(
                         if attempt == 0:
                             await asyncio.sleep(0.5)
                             continue
+                        _log_ai_call(
+                            tag, model, False, _elapsed(), None, "", f"http {r.status}"
+                        )
                         return None
 
                     data = json.loads(raw_text)
                     choice = data["choices"][0]
                     msg = choice.get("message", {})
                     reply = (msg.get("content") or "").strip()
-                    print(
-                        f"[AI] finish_reason={choice.get('finish_reason')}, 长度={len(reply)}"
-                    )
+                    finish_reason = choice.get("finish_reason") or ""
+                    usage = data.get("usage") or {}
+                    print(f"[AI] finish_reason={finish_reason}, 长度={len(reply)}")
 
                     if reply:
+                        _log_ai_call(tag, model, True, _elapsed(), usage, finish_reason)
                         return reply
 
                     print("[AI返回空，重试中...]")
@@ -166,8 +208,11 @@ async def get_ai_reply(
                 if attempt == 0:
                     await asyncio.sleep(0.5)
                     continue
+                _log_ai_call(tag, model, False, _elapsed(), None, "", type(e).__name__)
                 return None
 
+        # 两次尝试都失败（空响应或重试耗尽）
+        _log_ai_call(tag, model, False, _elapsed(), None, "", "retries_exhausted")
         return None
 
     except Exception as e:
@@ -175,4 +220,5 @@ async def get_ai_reply(
         import traceback
 
         traceback.print_exc()
+        _log_ai_call(tag, model, False, _elapsed(), None, "", type(e).__name__)
         return None

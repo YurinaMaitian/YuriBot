@@ -14,7 +14,9 @@ import asyncio
 import json
 import random
 import re
+import time
 from datetime import datetime
+from tokenize import group
 
 import aiosqlite
 
@@ -30,6 +32,9 @@ from config import (
     LIGHT_MODEL_KEY,
     LIGHT_MODEL_NAME,
     LIGHT_MODEL_URL,
+    MOOD_AIR_ENABLED,
+    SERIAL_QUEUE_MAX,
+    SEND_JOB_MAX_WAIT,
 )
 from core.ai import get_ai_reply
 from core.memory import (
@@ -41,6 +46,7 @@ from core.scene import get_current_scene
 from services.db import DB_PATH
 from services.user_manager import get_nickname
 from services.actions import send_text_chat
+from services import mood_air
 
 JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息后会不会想接话。
 
@@ -59,6 +65,8 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 - 纯表情包/纯图 → 倾向 false，除非特别想吐槽
 - 她明显没空（在睡觉/在上课）→ 倾向 false
 - 拿不准时倾向 false：接错话比错过可惜
+- 【她的动向】显示她正在回复或刚回复过某条 → 同话题的新消息倾向 false（她的回复马上到或已经到了，别重复接）；只有新消息开了明显新话题且她的话掉在地上可惜时才 true
+- 群友在讨论她的回复机制、judge、系统内部的事 → 她听不太懂这个，倾向 false；只有被直接点名问她才回
 
 判断步骤：
 第一步，判断新消息对谁说（addressee）：
@@ -133,6 +141,27 @@ _groups: dict[str, _GroupState] = {}
 _pending_silence: dict[tuple, tuple] = {}  # (group,user) → (_JudgeItem, task)
 _api_sem = asyncio.Semaphore(INTERJECT_API_CONCURRENCY)
 
+# ========== 每群串行接话队列（串行化：复查→生成→等发完→下一条） ==========
+RECHECK_MIN_AGE = 6.0  # 入队不足6秒的item跳过复查（上下文几乎没变，省一次调用）
+ITEM_TIMEOUT = 20.0  # 单条处理整体超时（防队头堵死）
+_serial_queues: dict[str, asyncio.Queue] = {}
+_serial_workers: dict[str, asyncio.Task] = {}
+# ========== 她的动向（在途回复可见性，TTL 20s，纯内存不进记忆） ==========
+ACTIVITY_TTL = 20.0
+_reply_activity: dict[str, list] = {}  # group_id → [(monotonic_ts, kind, excerpt)]
+
+
+def _note_activity(group_id: str, kind: str, excerpt: str):
+    """kind: pending=已决定回还没发 / sent=刚发出去。excerpt 截短防 prompt 膨胀"""
+    now = time.monotonic()
+    lst = [
+        (t, k, e)
+        for t, k, e in _reply_activity.get(group_id, [])
+        if now - t < ACTIVITY_TTL
+    ]
+    lst.append((now, kind, excerpt[:20]))
+    _reply_activity[group_id] = lst[-3:]  # 最多留3条，防刷屏时块膨胀
+
 
 async def init_interject_table():
     """建表 + 补列迁移（旧表无 addressee 列时自动 ALTER，保留旧日志）"""
@@ -157,6 +186,15 @@ async def init_interject_table():
             await db.execute(
                 "ALTER TABLE interject_log ADD COLUMN addressee TEXT DEFAULT ''"
             )
+        if "judge_latency_ms" not in cols:
+            await db.execute(
+                "ALTER TABLE interject_log ADD COLUMN judge_latency_ms INTEGER DEFAULT 0"
+            )
+        await db.execute("""CREATE TABLE IF NOT EXISTS arbiter_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id TEXT, n_items INTEGER, decision TEXT,
+            created_at TIMESTAMP)""")
+
         await db.commit()
 
 
@@ -258,6 +296,7 @@ async def _call_judge(system: str, user_msg: str, batch: bool = False) -> str:
             api_key=LIGHT_MODEL_KEY,
             timeout=60 if INTERJECT_THINKING else 30,
             enable_thinking=INTERJECT_THINKING,
+            tag="judge",
         )
 
 
@@ -269,13 +308,15 @@ async def _log(
     reason,
     addressee,
     continuation,
+    latency_ms: int = 0,  # 新增：judge 耗时（毫秒），默认 0
 ):
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 """INSERT INTO interject_log
-                   (group_id, user_id, msg, reply, reason, addressee, continuation, scene, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                   (group_id, user_id, msg, reply, reason, addressee,
+                    continuation, scene, judge_latency_ms, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
                     group_id,
                     user_id,
@@ -285,6 +326,7 @@ async def _log(
                     addressee,
                     int(continuation),
                     get_current_scene(),
+                    latency_ms,  # 新增：对应新列
                     datetime.now().isoformat(timespec="seconds"),
                 ),
             )
@@ -294,77 +336,164 @@ async def _log(
 
 
 def _schedule_reply(item: _JudgeItem, delay: float = 1.5):
-    """回复走 debounce，多条选中时按序号错开 2 秒发送（不@人）"""
-    from core.debounce import schedule
+    """judge=true 的item进每群串行队列，由队列worker串行处理（不再各自异步直发）"""
+    _note_activity(item.group_id, "pending", item.content)
+    q = _serial_queues.get(item.group_id)
+    if q is None:
+        q = asyncio.Queue(maxsize=SERIAL_QUEUE_MAX)
+        _serial_queues[item.group_id] = q
+    try:
+        q.put_nowait((item, time.monotonic()))
+    except asyncio.QueueFull:
+        print(
+            f"[接话队列] 群{item.group_id[:8]}满员({SERIAL_QUEUE_MAX})，丢弃: {item.content[:30]!r}"
+        )
+        asyncio.create_task(
+            _log(
+                item.group_id,
+                item.user_id,
+                item.content[:80],
+                False,
+                "队列满丢弃",
+                "",
+                False,
+                0,
+            )
+        )
+        return
+    task = _serial_workers.get(item.group_id)
+    if task is None or task.done():
+        _serial_workers[item.group_id] = asyncio.create_task(
+            _serial_worker(item.group_id)
+        )
+
+
+async def _serial_worker(group_id: str):
+    """每群一条流水线：出队 → 复查 → 生成 → 等气泡发完 → 下一条。
+    串行保证：第N条生成时第N-1条已在历史里（连续性根治）；
+    热群队列越长 → 复查过期率越高 → 自动安静（噪声自我调节）。"""
     from handlers.chat import handle_chat
-    from services.actions import send_text
+    from services.actions import send_text_chat
     from utils.scene_manager import check_and_update_scene
 
-    async def _do():
-        reply_text = await handle_chat(
-            item.content,
-            user_id=item.user_id,
-            group_id=item.group_id,
-            msg_id=item.msg_id,
-            is_group=True,
-        )
-        if not reply_text:
+    q = _serial_queues[group_id]
+    while True:
+        try:
+            item, enqueued_at = q.get_nowait()
+        except asyncio.QueueEmpty:
             return
-        await send_text_chat(
+        try:
+            # ===== 复查：入队已久才复查（新鲜item跳过） =====
+            if time.monotonic() - enqueued_at >= RECHECK_MIN_AGE:
+                if not await _recheck(item):
+                    continue
+
+            # ===== 生成 + 发送，等气泡真正发完（record_message已落历史） =====
+            async def _process(it=item):
+                reply_text = await handle_chat(
+                    it.content,
+                    user_id=it.user_id,
+                    group_id=it.group_id,
+                    msg_id=it.msg_id,
+                    is_group=True,
+                )
+                if not reply_text:
+                    return
+                done = asyncio.Event()
+                await send_text_chat(
+                    it.group_id,
+                    it.user_id,
+                    reply_text,
+                    it.msg_id,
+                    is_group=True,
+                    priority=False,
+                    trigger_content=it.content,
+                    done_event=done,
+                )
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=SEND_JOB_MAX_WAIT + 10)
+                except asyncio.TimeoutError:
+                    print(f"[接话队列] 等发送完成超时: {it.group_id[:8]}")
+                await check_and_update_scene(it.group_id, it.user_id, "bot", reply_text)
+                _note_activity(it.group_id, "sent", reply_text)
+
+            await asyncio.wait_for(_process(), timeout=ITEM_TIMEOUT)
+        except asyncio.TimeoutError:
+            print(
+                f"[接话队列] 单条处理超时丢弃(>{ITEM_TIMEOUT:.0f}s): {item.content[:30]!r}"
+            )
+            asyncio.create_task(
+                _log(
+                    group_id,
+                    item.user_id,
+                    item.content[:80],
+                    False,
+                    "处理超时丢弃",
+                    "",
+                    False,
+                    0,
+                )
+            )
+        except Exception as e:
+            print(f"[接话队列] {type(e).__name__}: {e}")
+
+
+async def _recheck(item: _JudgeItem) -> bool:
+    """出队复查：话题已被回过/已过期/在途回复已覆盖 → false丢弃。
+    注意：历史里可能已有更新消息，待判消息必须显式指定（不能用lines[-1]）。"""
+    ctx = get_context(item.group_id, item.user_id)
+    if not ctx:
+        return False
+    lines = await _judge_lines(ctx)
+    history_text = "\n".join(lines[-(INTERJECT_HISTORY_LINES + 1) :])
+    nick = await get_nickname(item.user_id)
+    judge_input = (
+        f"【本群成员】YuriBot（她，也被叫 yuri / bot）、{_roster_from_lines(lines)}\n"
+        f"【她现在】{get_current_scene()}\n"
+        f"【最近群聊】\n{history_text}\n\n"
+        f"【待复查的消息】{nick}：{item.content}\n\n"
+        "【复查】这条消息此前被判值得回。现在距那时已过了一些时间，"
+        "上面的群聊里有这期间的新对话。重新判断：这个话题（或等价的追问）"
+        "已经被她回过了吗？她现在再回会显得重复或过期吗？是则 reply=false。"
+        "严格 JSON 输出。"
+    )
+    judge_input += _activity_block(item.group_id)
+    jt0 = time.monotonic()
+    raw = await _call_judge(JUDGE_SYSTEM, judge_input)
+    latency_ms = int((time.monotonic() - jt0) * 1000)
+    reply, reason, addressee = _parse_judge(raw)
+    print(f"[接话] 复查: reply={reply}, reason={reason}, msg={item.content[:30]!r}")
+    if not reply:
+        await _log(
             item.group_id,
             item.user_id,
-            reply_text,
-            item.msg_id,
-            is_group=True,
-            priority=False,
+            item.content[:80],
+            False,
+            f"复查:{reason}",
+            addressee,
+            False,
+            latency_ms,
         )
-        await check_and_update_scene(item.group_id, item.user_id, "bot", reply_text)
-
-    schedule(f"interject:{item.group_id}", _do, delay=delay)
+    return reply
 
 
 async def _judge_one(item: _JudgeItem):
+    system = JUDGE_SYSTEM
     ctx = get_context(item.group_id, item.user_id)
     if not ctx:
         return
     lines = await _judge_lines(ctx)
-    history_text = "\n".join(lines[-(INTERJECT_HISTORY_LINES + 1) : -1])
-    current_line = lines[-1]
     continuation = item.has_quote or any(m["speaker"] == "bot" for m in ctx[-2:])
 
-    system = JUDGE_SYSTEM
-    judge_input = (
-        f"【本群成员】YuriBot（她，也被叫 yuri / bot）、{_roster_text(ctx)}\n"
-        f"【她现在】{get_current_scene()}\n"
-        f"【最近群聊】\n{history_text}\n\n"
-        f"【新消息】{current_line}\n\n"
-        "按步骤判断她会不会想接话。"
-    )
-    from config import MOOD_AIR_ENABLED
-    from services import mood_air
+    judge_input = _compose_judge_input(lines, continuation, group_id=item.group_id)
 
-    # 情境自觉提示：连发计数 + 作息状态（比冷却聪明——让她自己判断，不是外部禁令）
-    streak = 0
-    for m in reversed(ctx[:-1]):
-        if m["speaker"] == "bot":
-            streak += 1
-        else:
-            break
-    scene_text = get_current_scene()
-    extra = []
-    if continuation:
-        extra.append("上一条消息就是她刚发的，这条很可能是对她说的")
-    if streak >= 2:
-        extra.append(f"她已经连续发了{streak}条，这条没点名她名字的话她倾向先潜水")
-    if any(k in scene_text for k in ("睡觉", "上课")):
-        extra.append(f"她现在在{scene_text}，没被直接喊名字就装没听见")
-    # 气氛站消费端：solemn 时未被直接点名就保持沉默（须在 judge_input 拼接前 append）
+    # 气氛站 solemn 提示（依赖 item.group_id，留在调用处，不放进纯函数）
     if MOOD_AIR_ENABLED and mood_air.get_register(item.group_id) == "solemn":
-        extra.append("当前气氛沉重（有群友难过），没被直接点名就保持沉默")
-    if extra:
-        judge_input += "\n\n（" + "；".join(extra) + "）"
+        judge_input += "\n\n（当前气氛沉重（有群友难过），没被直接点名就保持沉默）"
 
+    jt0 = time.monotonic()
     raw = await _call_judge(system, judge_input)
+    latency_ms = int((time.monotonic() - jt0) * 1000)
     reply, reason, addressee = _parse_judge(raw)
     print(
         f"[接话] judge: reply={reply}, addressee={addressee}, "
@@ -378,6 +507,7 @@ async def _judge_one(item: _JudgeItem):
         reason,
         addressee,
         continuation,
+        latency_ms,
     )
     if reply:
         _schedule_reply(item)
@@ -403,6 +533,7 @@ async def _judge_batch(group_id: str, items: list[_JudgeItem]):
         f"【待判消息】\n" + "\n".join(numbered) + "\n\n"
         "逐条判断哪些值得她回。"
     )
+    judge_input += _activity_block(group_id)
     raw = await _call_judge(system, judge_input, batch=True)
     picked = _parse_batch(raw)
     print(f"[插话] 批量judge: 选中{len(picked)}/{len(items)}条, raw={raw[:80]!r}")
@@ -418,7 +549,7 @@ async def _judge_batch(group_id: str, items: list[_JudgeItem]):
             "",
             False,
         )
-        _schedule_reply(it, delay=1.5 + seq * 2.0)
+    _schedule_reply(it)
     for idx, it in enumerate(items):
         if idx not in picked:
             await _log(
@@ -499,3 +630,91 @@ async def maybe_interject(
         _pending_silence[key] = (item, task)
     except Exception as e:
         print(f"[接话] {type(e).__name__}: {e}")
+
+
+def _roster_from_lines(lines: list) -> str:
+    roster = []
+    for l in lines:
+        identity = l.split("：", 1)[0]
+        # 去掉行首相对时间前缀
+        for prefix in (
+            "[刚刚] ",
+            "[几分钟前] ",
+            "[刚才] ",
+            "[半小时前] ",
+            "[一小时前] ",
+        ):
+            if identity.startswith(prefix):
+                identity = identity[len(prefix) :]
+        if identity not in roster:
+            roster.append(identity)
+    return "、".join(roster) if roster else "（暂无）"
+
+
+def _compose_judge_input(
+    lines: list, continuation: bool, scene_text: str = None, group_id: str = ""
+) -> str:
+    """
+    纯函数：由合并后的历史行组装 judge 输入。
+    scene_text 可注入（测试用），默认取当前情境。
+    """
+    if scene_text is None:
+        scene_text = get_current_scene()
+    history_text = "\n".join(lines[-(INTERJECT_HISTORY_LINES + 1) : -1])
+    current_line = lines[-1]
+
+    extra = []
+    if continuation:
+        extra.append("上一条消息就是她刚发的，这条很可能是对她说的")
+    streak = 0
+    for l in reversed(lines[:-1]):
+        if (
+            l.lstrip().startswith(
+                (
+                    "YuriBot：",
+                    "[",
+                )
+            )
+            and "YuriBot：" in l[:30]
+        ):
+            streak += 1
+        else:
+            break
+    if streak >= 2:
+        extra.append(f"她已经连续发了{streak}条，这条没点名她名字的话她倾向先潜水")
+    if any(k in scene_text for k in ("睡觉", "上课")):
+        extra.append(f"她现在在{scene_text}，没被直接喊名字就装没听见")
+
+    judge_input = (
+        f"【本群成员】YuriBot（她，也被叫 yuri / bot）、{_roster_from_lines(lines)}\n"
+        f"【她现在】{scene_text}\n"
+        f"【最近群聊】\n{history_text}\n\n"
+        f"【新消息】{current_line}\n\n"
+        "按步骤判断她会不会想接话。"
+    )
+    if extra:
+        judge_input += "\n\n（" + "；".join(extra) + "）"
+
+    if group_id:
+        judge_input += _activity_block(group_id)
+    return judge_input
+
+
+def _activity_block(group_id: str) -> str:
+    """【她的动向】块：在途回复可见性。无活动返回空串"""
+    now = time.monotonic()
+    entries = [
+        e for e in _reply_activity.get(group_id, []) if now - e[0] < ACTIVITY_TTL
+    ]
+    if not entries:
+        return ""
+    lines = []
+    for ts, kind, excerpt in entries:
+        ago = int(now - ts)
+        if kind == "pending":
+            lines.append(f"- 她正在回复「{excerpt}」那条（{ago}秒前决定的，还没发）")
+        else:
+            lines.append(f"- 她刚回了「{excerpt}」（{ago}秒前）")
+    return "\n\n【她的动向】（她现在正在做的事，判断接不接话时必须考虑）\n" + "\n".join(
+        lines
+    )

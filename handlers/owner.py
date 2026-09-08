@@ -1,8 +1,11 @@
 import asyncio
+import aiosqlite
+from datetime import datetime
 import re
 from config import BOT_OWNER
 from core.registry import cmd
 from services.user_manager import set_nickname, set_group_name, get_nickname
+from services.db import DB_PATH
 
 
 def _is_owner(user_id: str) -> bool:
@@ -334,4 +337,154 @@ async def slanglist_cmd(ctx):
     lines = [f"📚 已收录 {len(rows)} 条："]
     for r in rows:
         lines.append(f"- {r['term']}：{r['explanation'][:40]}")
+    return "\n".join(lines)
+
+
+@cmd("good", desc="[主人] 给bot上一条回复点好评", hidden=True)
+async def good_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    return await _rate_last(ctx, 1)
+
+
+@cmd("bad", desc="[主人] 给bot上一条回复点差评", hidden=True)
+async def bad_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    return await _rate_last(ctx, -1)
+
+
+async def _rate_last(ctx, rating: int) -> str:
+    from core.memory import get_context
+
+    ctx_msgs = get_context(ctx.group_id, ctx.user_id)
+    last_bot = next((m for m in reversed(ctx_msgs) if m["speaker"] == "bot"), None)
+    if not last_bot:
+        return "没有找到可评价的回复"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""CREATE TABLE IF NOT EXISTS feedback_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id TEXT, user_id TEXT, bot_msg TEXT,
+            rating INTEGER, created_at TIMESTAMP)""")
+        await db.execute(
+            "INSERT INTO feedback_log (group_id, user_id, bot_msg, rating, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (
+                ctx.group_id,
+                ctx.user_id,
+                last_bot["content"][:200],
+                rating,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        await db.commit()
+    return "✅ 已记录" if rating > 0 else "📝 已记录，建议把这条 case 加进测试集"
+
+
+import json as _json
+
+
+@cmd("stats", desc="[主人] 今日运行指标汇总", hidden=True)
+async def stats_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+
+    import os
+    from datetime import datetime
+    from config import DATA_DIR
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = []
+
+    # ===== 1. AI 调用指标（jsonl 聚合） =====
+    path = os.path.join(DATA_DIR, "metrics", "ai_calls.jsonl")
+    by_tag: dict = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if not str(rec.get("ts", "")).startswith(today):
+                    continue
+                s = by_tag.setdefault(
+                    rec["tag"], {"n": 0, "ok": 0, "lat": 0, "pt": 0, "ct": 0}
+                )
+                s["n"] += 1
+                s["ok"] += 1 if rec.get("ok") else 0
+                s["lat"] += rec.get("latency_ms") or 0
+                s["pt"] += rec.get("prompt_tokens") or 0
+                s["ct"] += rec.get("completion_tokens") or 0
+
+    if by_tag:
+        lines.append(f"📊 {today} AI调用：")
+        for tag, s in sorted(by_tag.items()):
+            avg = s["lat"] // max(1, s["n"])
+            lines.append(
+                f"  {tag}: {s['n']}次 成功{s['ok']} 均延迟{avg}ms"
+                f" tok {s['pt']}+{s['ct']}"
+            )
+    else:
+        lines.append("📊 今日暂无AI调用")
+
+    # ===== 2. judge / 表情包 / 反馈（SQLite 聚合） =====
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(reply),0), COALESCE(AVG(judge_latency_ms),0)"
+            " FROM interject_log WHERE created_at >= ?",
+            (today,),
+        ) as cur:
+            n, replied, avg_lat = await cur.fetchone()
+        if n:
+            lines.append(
+                f"🧑‍⚖️ 接话: {n}次 回复{replied}次({replied * 100 // n}%)"
+                f" 均延迟{int(avg_lat)}ms"
+            )
+        else:
+            lines.append("🧑‍⚖️ 接话: 今日暂无")
+
+        try:
+            async with db.execute(
+                "SELECT action, COUNT(*) FROM meme_log"
+                " WHERE created_at >= ? GROUP BY action",
+                (today,),
+            ) as cur:
+                meme_rows = await cur.fetchall()
+            if meme_rows:
+                dist = " ".join(f"{a}×{c}" for a, c in meme_rows)
+                lines.append(f"🖼 表情包: {dist}")
+        except Exception:
+            pass
+
+        try:
+            await db.execute(
+                """CREATE TABLE IF NOT EXISTS feedback_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT, user_id TEXT, bot_msg TEXT,
+                    rating INTEGER, created_at TIMESTAMP)"""
+            )
+            async with db.execute(
+                "SELECT rating, COUNT(*) FROM feedback_log"
+                " WHERE created_at >= ? GROUP BY rating",
+                (today,),
+            ) as cur:
+                fb = dict(await cur.fetchall())
+            if fb:
+                lines.append(f"👍{fb.get(1, 0)} 👎{fb.get(-1, 0)}")
+        except Exception:
+            pass
+
+        try:
+            async with db.execute(
+                "SELECT COUNT(*) FROM interject_log"
+                " WHERE created_at >= ? AND reason LIKE '复查%'",
+                (today,),
+            ) as cur:
+                n_drop = (await cur.fetchone())[0]
+            if n_drop:
+                lines.append(f"🔁 复查丢弃: {n_drop}条")
+        except Exception:
+            pass
+
     return "\n".join(lines)

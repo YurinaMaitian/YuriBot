@@ -34,6 +34,7 @@ class _SendJob:
         "image_path",
         "image_desc",
         "enqueued_at",
+        "done",
     )
 
     def __init__(
@@ -47,6 +48,7 @@ class _SendJob:
         memory_tag,
         image_path="",
         image_desc="",
+        done=None,
     ):
         self.group_id = group_id
         self.user_id = user_id
@@ -58,6 +60,7 @@ class _SendJob:
         self.image_path = image_path
         self.image_desc = image_desc
         self.enqueued_at = time.time()
+        self.done = done
 
 
 class _GroupQ:
@@ -146,14 +149,26 @@ async def enqueue_chat(
     at_user: str = "",
     priority: bool = False,
     memory_tag: str = "",
+    done_event=None,
 ):
     """人设对话文本：分泡入队"""
     chunks = pack_bubbles(content)
     if not chunks:
+        if done_event is not None:
+            done_event.set()
         return
     q = _queues.setdefault(group_id, _GroupQ())
     q.put(
-        _SendJob(group_id, user_id, chunks, msg_id, at_user, is_group, memory_tag),
+        _SendJob(
+            group_id,
+            user_id,
+            chunks,
+            msg_id,
+            at_user,
+            is_group,
+            memory_tag,
+            done=done_event,
+        ),
         priority=priority,
     )
     _ensure_worker(group_id, q)
@@ -227,6 +242,9 @@ async def _deliver_turn(job: _SendJob):
         await record_message(
             job.group_id, job.user_id, "bot", f"{job.memory_tag}{chunk}"
         )
+
+    if job.done is not None:
+        job.done.set()
     await asyncio.sleep(SEND_TURN_GAP)
 
 

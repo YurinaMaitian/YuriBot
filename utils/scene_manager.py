@@ -122,6 +122,7 @@ async def _judge_once(group_id: str) -> bool:
             api_key=LIGHT_MODEL_KEY,
             enable_thinking=False,
             timeout=30,
+            tag="scene",
         )
         summary, cut = _parse_judge(raw)
     except Exception as e:
@@ -219,6 +220,7 @@ async def _summarize(msgs: list[dict]) -> str:
         api_url=LIGHT_MODEL_URL,
         api_key=LIGHT_MODEL_KEY,
         enable_thinking=False,
+        tag="scene",
     )
     if not summary:
         summary = "群友聊天"

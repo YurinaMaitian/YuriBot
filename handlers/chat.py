@@ -113,6 +113,7 @@ async def handle_chat(
     group_id: str = "",
     msg_id: str = "",
     is_group: bool = True,
+    prompt_hint: str = "",
 ) -> str | None:
     """
     AI 聊天入口。返回 None 表示静默丢弃（拟人"忘了回复"），调用方不要发消息。
@@ -146,7 +147,6 @@ async def handle_chat(
     plan = await route(content, history_text)
 
     # 2. 有待解析的图片引用 → 占位动作 + 异步等待
-    # 2. 有待解析的图片引用 → 占位动作 + 异步等待
     referenced = plan.get("referenced_images") or []
     delta, action, resolved = 0.0, "", []
     if referenced:
@@ -174,6 +174,8 @@ async def handle_chat(
             f"\n\n【系统提示】群友引用的图中，有 {len(referenced) - len(resolved)} 张"
             "没能看清（解析超时），回复时可以自然带过或请对方重发，不要硬编内容。"
         )
+    if not content or not content.strip():
+        prompt += "\n\n对方@了你一下，应该是想让你接话回复点什么。"
 
     return await get_ai_reply(
         content,
@@ -181,4 +183,5 @@ async def handle_chat(
         group_id=group_id,
         prompt_override=prompt,
         timeout=60,  # 主模型生成 120 tokens，给足时间
+        tag="chat",
     )

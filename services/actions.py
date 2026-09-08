@@ -43,6 +43,7 @@ async def send_text_chat(
     at_user: str = "",
     priority: bool = False,
     trigger_content: str = "",
+    done_event=None,
 ):
     """
     人设对话发送：进发送队列（串行 + 打字节奏 + 气泡化）。
@@ -66,6 +67,7 @@ async def send_text_chat(
         at_user=at_id,
         priority=priority,
         memory_tag=memory_tag,
+        done_event=done_event,
     )
 
     if is_group:

@@ -129,6 +129,7 @@ async def meme_tool_loop(
             temperature=0.0,
             timeout=30,
             enable_thinking=False,
+            tag="meme_chooser",
         )
         pick = 0
         m = re.search(r"\{[^{}]*\}", raw or "")

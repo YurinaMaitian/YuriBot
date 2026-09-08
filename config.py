@@ -158,3 +158,7 @@ MEME_COOLDOWN = float(os.getenv("MEME_COOLDOWN", "600"))  # 每群配图冷却�
 
 # ========== 气氛站（shadow 模式：先记录不消费，验证后再开闸） ==========
 MOOD_AIR_ENABLED = os.getenv("MOOD_AIR_ENABLED", "true").lower() == "true"
+
+
+# ========== 接话串行队列（替代仲裁器） ==========
+SERIAL_QUEUE_MAX = int(os.getenv("SERIAL_QUEUE_MAX", "8"))  # 每群队列上限，满员丢新item
