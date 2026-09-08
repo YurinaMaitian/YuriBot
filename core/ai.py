@@ -222,3 +222,135 @@ async def get_ai_reply(
         traceback.print_exc()
         _log_ai_call(tag, model, False, _elapsed(), None, "", type(e).__name__)
         return None
+
+
+async def get_ai_reply_with_tools(
+    system: str,
+    user_message: str,
+    tools: list,
+    tool_executor,
+    max_rounds: int = 2,
+) -> str | None:
+    """
+    带 tool calling 的主模型对话。
+    模型发起 tool_call → tool_executor(name, args) 执行 → 结果回灌 → 继续直到最终文本。
+    tool_executor: async (name, args_dict) -> str
+
+    兜底三层（预算耗尽时不静默消失）：
+    ① 最后机会轮前注入 system 提醒"禁止再要工具，立即作答"
+    ② 最后轮仍请求工具 → 不执行，忽略该请求
+    ③ 最后轮仍无正文 → 返回确定性文案（人设化认怂，不烧 LLM）
+    """
+    t0 = time.monotonic()
+    headers = {
+        "Authorization": f"Bearer {MAIN_MODEL_KEY}",
+        "Content-Type": "application/json",
+    }
+    msgs = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_message},
+    ]
+    session = get_session()
+    try:
+        for rnd in range(max_rounds + 1):  # +1 = 强制收尾轮
+            final_round = rnd == max_rounds
+            if final_round:
+                msgs.append(
+                    {
+                        "role": "system",
+                        "content": "【系统提醒】工具调用次数已用完，禁止再请求工具。"
+                        "基于已获得的信息立即给出最终回复，哪怕不完整。",
+                    }
+                )
+
+            payload = {
+                "model": MAIN_MODEL_NAME,
+                "messages": msgs,
+                "max_tokens": MAIN_MODEL_MAX_TOKENS,
+                "temperature": MAIN_MODEL_TEMP,
+                "tools": tools,
+            }
+            async with session.post(
+                MAIN_MODEL_URL, headers=headers, json=payload, timeout=60
+            ) as r:
+                raw = await r.text()
+                if r.status != 200:
+                    print(f"[AI工具调用] HTTP {r.status}: {raw[:200]}")
+                    return None
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    print(f"[AI工具调用] 响应非JSON: {raw[:200]}")
+                    return None
+            if not isinstance(data, dict) or "choices" not in data:
+                print(f"[AI工具调用] 响应缺choices: {str(data)[:200]}")
+                return None
+
+            choice = data["choices"][0]
+            msg = choice.get("message", {})
+            print(
+                f"[AI工具调用] 轮次{rnd}返回 finish_reason={choice.get('finish_reason')}, "
+                f"content长度={len(msg.get('content') or '')}, "
+                f"tool_calls={len(msg.get('tool_calls') or [])}"
+            )
+            tool_calls = msg.get("tool_calls") or []
+
+            if tool_calls and not final_round:
+                msgs.append(msg)
+                for tc in tool_calls:
+                    name = tc.get("function", {}).get("name", "")
+                    try:
+                        args = json.loads(tc["function"].get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    print(f"[tool_call] {name}({str(args)[:80]})")
+                    try:
+                        result = await tool_executor(name, args)
+                    except Exception as e:
+                        result = f"（工具执行失败：{type(e).__name__}）"
+                    msgs.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": str(result)[:1500],
+                        }
+                    )
+                continue
+
+            if tool_calls and final_round:
+                # 最后轮仍要工具：不执行，忽略请求，逼它基于已有信息答
+                print("[AI工具调用] 最后轮仍请求工具，强制基于已有信息回复")
+
+            reply = (msg.get("content") or "").strip()
+            if reply:
+                _log_ai_call(
+                    "chat",
+                    MAIN_MODEL_NAME,
+                    True,
+                    (time.monotonic() - t0) * 1000,
+                    data.get("usage") or {},
+                    choice.get("finish_reason") or "",
+                )
+                return reply
+
+            if final_round:
+                # 确定性兜底：宁可人设化认怂，不可静默消失（@场景必须有回应）
+                print("[AI工具调用] 最后轮仍无内容，使用兜底文案")
+                return "（这个我查了查没理清，先不瞎说，等下再聊）"
+
+            # 中间轮空内容：记账后丢弃（如 thinking 吃光预算的断头）
+            _log_ai_call(
+                "chat",
+                MAIN_MODEL_NAME,
+                False,
+                (time.monotonic() - t0) * 1000,
+                data.get("usage") or {},
+                choice.get("finish_reason") or "",
+                "empty_content",
+            )
+            print("[AI工具调用] 中间轮返回空内容，本轮回复丢弃")
+            return None
+
+    except Exception as e:
+        print(f"[AI工具调用异常] {type(e).__name__}: {e}")
+        return None

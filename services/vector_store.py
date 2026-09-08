@@ -269,3 +269,84 @@ async def search_slang_points(query_vector: list[float], top_k: int = 2) -> list
     except Exception as e:
         print(f"[Qdrant] 梗检索失败: {e}")
         return []
+
+
+# ========== 搜索知识库（web_notes：语义缓存，覆盖写纠错） ==========
+WEB_NOTES_COLLECTION = "web_notes"
+
+
+async def init_web_notes_collection():
+    client = _get_client()
+    try:
+        collections = await client.get_collections()
+        if WEB_NOTES_COLLECTION in [c.name for c in collections.collections]:
+            print(f"[Qdrant] Collection '{WEB_NOTES_COLLECTION}' 已存在")
+            return
+        await client.create_collection(
+            collection_name=WEB_NOTES_COLLECTION,
+            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        )
+        print(f"[Qdrant] Collection '{WEB_NOTES_COLLECTION}' 创建成功")
+    except Exception as e:
+        print(f"[Qdrant] web_notes 初始化失败: {e}")
+
+
+async def upsert_web_note(
+    point_id: int,
+    query: str,
+    answer: str,
+    url: str,
+    revision: int,
+    vector: list[float],
+    group_id: str = "",
+):
+    """point_id 复用旧值=覆盖写（纠错），新值=新记录。ID 由调用方语义查重后决定"""
+    from datetime import datetime
+
+    client = _get_client()
+    try:
+        await client.upsert(
+            collection_name=WEB_NOTES_COLLECTION,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "query": query[:100],
+                        "answer": answer[:500],
+                        "url": url[:200],
+                        "revision": revision,
+                        "group_id": group_id,
+                        "created_at": datetime.now().isoformat(timespec="seconds"),
+                    },
+                )
+            ],
+        )
+    except Exception as e:
+        print(f"[Qdrant] web_note 入库失败: {e}")
+
+
+async def search_web_notes(query_vector: list[float], top_k: int = 1) -> list[dict]:
+    """返回带 point id 的命中结果（id 是覆盖写的钥匙）"""
+    client = _get_client()
+    try:
+        results = await client.search(
+            collection_name=WEB_NOTES_COLLECTION,
+            query_vector=query_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+        return [
+            {
+                "id": r.id,
+                "score": r.score,
+                "query": r.payload.get("query", ""),
+                "answer": r.payload.get("answer", ""),
+                "created_at": r.payload.get("created_at", ""),
+                "revision": r.payload.get("revision", 1),
+            }
+            for r in results
+        ]
+    except Exception as e:
+        print(f"[Qdrant] web_notes 检索失败: {e}")
+        return []

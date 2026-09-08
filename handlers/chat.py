@@ -12,6 +12,35 @@ from config import (
     IMAGE_ACTION_COOLDOWN,
 )
 
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "用手机联网搜索实时信息：游戏版本卡池、新番消息、时事、不认识的梗。"
+        "群友让你查、或你要说不确定的事实时使用，别凭印象答时效性问题。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "想查的内容，自然语言一句话直接写，不要写你猜的年份版本号",
+                },
+                "freshness": {
+                    "type": "string",
+                    "enum": ["oneWeek", "oneMonth", "oneYear", "noLimit"],
+                    "description": "时效范围：游戏版本/新闻/近期活动用 oneMonth（默认），"
+                    "老梗、百科、历史内容用 noLimit",
+                },
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": "之前搜过的结果可能有错、或被群友纠正过时设 true："
+                    "跳过缓存重新搜索并覆盖旧记录",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
 # 占位动作冷却：group_id → 上次发动作的时间戳（"" 表示私聊）
 _last_action_time: dict[str, float] = {}
 
@@ -177,11 +206,25 @@ async def handle_chat(
     if not content or not content.strip():
         prompt += "\n\n对方@了你一下，应该是想让你接话回复点什么。"
 
-    return await get_ai_reply(
-        content,
-        user_id=user_id,
-        group_id=group_id,
-        prompt_override=prompt,
-        timeout=60,  # 主模型生成 120 tokens，给足时间
-        tag="chat",
+    from core.ai import get_ai_reply_with_tools, SYSTEM_PROMPT
+
+    async def _tool_executor(name, args):
+        if name == "web_search":
+            from services import web_search
+
+            return await web_search.web_search(
+                args.get("query", ""),
+                freshness=args.get("freshness", "oneMonth"),
+                force_refresh=bool(args.get("force_refresh", False)),
+                group_id=group_id,
+                user_id=user_id,
+            )
+        return f"（未知工具：{name}）"
+
+    return await get_ai_reply_with_tools(
+        SYSTEM_PROMPT,
+        prompt,
+        tools=[WEB_SEARCH_TOOL],
+        tool_executor=_tool_executor,
+        max_rounds=3,
     )

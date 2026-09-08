@@ -46,7 +46,11 @@ async def check_and_update_scene(
     消息入队入口（main.py 调用点不变）。
     元交互（指令/动作）不入队；攒够阈值则触发 LLM 分割判断。
     """
-    if content.startswith("[动作]") or content.startswith("[指令]"):
+    if (
+        content.startswith("[动作]")
+        or content.startswith("[指令]")
+        or content.startswith("[搜索]")
+    ):
         return
 
     now = datetime.now()

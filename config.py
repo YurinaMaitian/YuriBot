@@ -162,3 +162,12 @@ MOOD_AIR_ENABLED = os.getenv("MOOD_AIR_ENABLED", "true").lower() == "true"
 
 # ========== 接话串行队列（替代仲裁器） ==========
 SERIAL_QUEUE_MAX = int(os.getenv("SERIAL_QUEUE_MAX", "8"))  # 每群队列上限，满员丢新item
+
+
+# ========== 联网搜索（博查） ==========
+BOCHA_API_KEY = os.getenv("BOCHA_API_KEY", "")
+BOCHA_WEB_SEARCH_URL = "https://api.bochaai.com/v1/web-search"
+# shadow 期 false：DS 会想搜、记日志，但不真调 API（攒 case 评审后开闸）
+WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
+WEB_SEARCH_MAX_PER_DAY = int(os.getenv("WEB_SEARCH_MAX_PER_DAY", "10"))
+WEB_NOTES_TTL = float(os.getenv("WEB_NOTES_TTL", str(3 * 86400)))  # 缓存3天

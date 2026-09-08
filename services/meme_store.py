@@ -25,6 +25,9 @@ from config import (
     DATA_DIR,
     MEME_COOLDOWN,
     MEME_MIN_REPLY_LEN,
+    LIGHT_MODEL_URL,
+    LIGHT_MODEL_KEY,
+    LIGHT_MODEL_NAME,
 )
 from core.ai import get_ai_reply
 from core.memory import get_context
@@ -129,6 +132,9 @@ async def meme_tool_loop(
             temperature=0.0,
             timeout=30,
             enable_thinking=False,
+            model=LIGHT_MODEL_NAME,
+            api_url=LIGHT_MODEL_URL,
+            api_key=LIGHT_MODEL_KEY,
             tag="meme_chooser",
         )
         pick = 0

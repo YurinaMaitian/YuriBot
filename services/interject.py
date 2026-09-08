@@ -150,7 +150,7 @@ _api_sem = asyncio.Semaphore(INTERJECT_API_CONCURRENCY)
 
 # ========== 每群串行接话队列（串行化：复查→生成→等发完→下一条） ==========
 RECHECK_MIN_AGE = 6.0  # 入队不足6秒的item跳过复查（上下文几乎没变，省一次调用）
-ITEM_TIMEOUT = 20.0  # 单条处理整体超时（防队头堵死）
+GEN_TIMEOUT = 30.0
 _serial_queues: dict[str, deque] = {}
 _serial_workers: dict[str, asyncio.Task] = {}
 # ========== 她的动向（在途回复可见性，TTL 20s，纯内存不进记忆） ==========
@@ -342,14 +342,11 @@ async def _log(
         print(f"[接话日志失败] {type(e).__name__}: {e}")
 
 
-_serial_queues: dict[str, asyncio.Queue] = {}
-_serial_workers: dict[str, asyncio.Task] = {}
-
-
 async def _serial_worker(group_id: str):
-    """每群一条流水线：出队 → 复查 → 生成 → 等气泡发完 → 下一条。
+    """每群一条流水线：出队 → 复查 → 生成(限时) → 发送(自带超时) → 下一条。
     串行保证：第N条生成时第N-1条已在历史里（连续性根治）；
-    热群队列越长 → 复查过期率越高 → 自动安静（噪声自我调节）。"""
+    热群队列越长 → 复查过期率越高 → 自动安静（噪声自我调节）。
+    生成与发送分阶段计时：搜索等多轮工具拉长生成长度时，不挤占发送节奏预算。"""
     from handlers.chat import handle_chat
     from services.actions import send_text_chat
     from utils.scene_manager import check_and_update_scene
@@ -360,14 +357,14 @@ async def _serial_worker(group_id: str):
             return
         item, enqueued_at = q.popleft()
         try:
-            # ===== 复查：入队已久才复查（新鲜item跳过） =====
+            # ===== 复查：仅接话item且入队已久才复查；直答(strong)跳过 =====
             if not item.strong and time.monotonic() - enqueued_at >= RECHECK_MIN_AGE:
                 if not await _recheck(item):
                     continue
 
-            # ===== 生成 + 发送，等气泡真正发完（record_message已落历史） =====
-            async def _process(it=item):
-                reply_text = await handle_chat(
+            # ===== 阶段1：生成（含工具轮次，限时 GEN_TIMEOUT） =====
+            async def _gen(it=item):
+                return await handle_chat(
                     it.content,
                     user_id=it.user_id,
                     group_id=it.group_id,
@@ -375,31 +372,11 @@ async def _serial_worker(group_id: str):
                     is_group=True,
                     prompt_hint="你被群友@了" if it.strong else "",
                 )
-                if not reply_text:
-                    return
-                done = asyncio.Event()
-                await send_text_chat(
-                    it.group_id,
-                    it.user_id,
-                    reply_text,
-                    it.msg_id,
-                    is_group=True,
-                    priority=False,
-                    at_user=it.user_id if it.strong else "",
-                    trigger_content=it.content,
-                    done_event=done,
-                )
-                try:
-                    await asyncio.wait_for(done.wait(), timeout=SEND_JOB_MAX_WAIT + 10)
-                except asyncio.TimeoutError:
-                    print(f"[接话队列] 等发送完成超时: {it.group_id[:8]}")
-                await check_and_update_scene(it.group_id, it.user_id, "bot", reply_text)
-                _note_activity(it.group_id, "sent", reply_text)
 
-            await asyncio.wait_for(_process(), timeout=ITEM_TIMEOUT)
+            reply_text = await asyncio.wait_for(_gen(), timeout=GEN_TIMEOUT)
         except asyncio.TimeoutError:
             print(
-                f"[接话队列] 单条处理超时丢弃(>{ITEM_TIMEOUT:.0f}s): {item.content[:30]!r}"
+                f"[接话队列] 生成超时丢弃(>{GEN_TIMEOUT:.0f}s): {item.content[:30]!r}"
             )
             asyncio.create_task(
                 _log(
@@ -407,14 +384,39 @@ async def _serial_worker(group_id: str):
                     item.user_id,
                     item.content[:80],
                     False,
-                    "处理超时丢弃",
+                    "生成超时丢弃",
                     "",
                     False,
                     0,
                 )
             )
+            continue
         except Exception as e:
             print(f"[接话队列] {type(e).__name__}: {e}")
+            continue
+
+        if not reply_text:
+            continue
+
+        # ===== 阶段2：发送（不占生成预算，自带兜底超时） =====
+        try:
+            done = asyncio.Event()
+            await send_text_chat(
+                item.group_id,
+                item.user_id,
+                reply_text,
+                item.msg_id,
+                is_group=True,
+                priority=False,
+                at_user=item.user_id if item.strong else "",
+                trigger_content=item.content,
+                done_event=done,
+            )
+            await asyncio.wait_for(done.wait(), timeout=SEND_JOB_MAX_WAIT + 10)
+        except asyncio.TimeoutError:
+            print(f"[接话队列] 等发送完成超时: {item.group_id[:8]}")
+        await check_and_update_scene(item.group_id, item.user_id, "bot", reply_text)
+        _note_activity(item.group_id, "sent", reply_text)
 
 
 async def _recheck(item: _JudgeItem) -> bool:
