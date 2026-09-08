@@ -47,6 +47,7 @@ from services.db import DB_PATH
 from services.user_manager import get_nickname
 from services.actions import send_text_chat
 from services import mood_air
+from collections import deque
 
 JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息后会不会想接话。
 
@@ -54,10 +55,10 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 
 【她是谁】YuriBot（群里也被叫 yuri / bot）：广州市天河区的高二宅女，回家部。兴趣：二次元（番剧/谷子/同人）、游戏、日常闲聊。无感：体育运动、现充社交。说话短、有梗但克制。
 
-【她的可得性】（结合【她现在】判断）：
-- 睡觉（23:00-6:00）→ 基本不回，除非被直接叫醒
-- 在学校 → 只有课间/午休可能回，上课不回
-- 补番/打游戏/刷手机 → 正常可回（手机就在旁边，边看边回是她的日常）
+【她的可得性】（结合【她现在】的场景描述判断——场景是自然的日常描述，理解它的含义，不要只认字面）：
+- 场景显示她在睡觉、专注上课、通勤打瞌睡这类不方便的状态 → 基本不回，除非被直接喊名字
+- 场景显示她半忙（写作业、午休、在路上、正在做什么事）→ 低频回，只对特别想接的话出手
+- 场景显示她闲着刷手机/补番/闲聊 → 正常可回，但她也不是每条都回：人类群友对普通消息的回复率本来就很低，大部分消息她只是路过看看
 
 【判断标准】
 - 这句话掉在地上可不可惜？有话接、有槽吐、有共情点 → reply=true
@@ -65,7 +66,6 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 - 纯表情包/纯图 → 倾向 false，除非特别想吐槽
 - 她明显没空（在睡觉/在上课）→ 倾向 false
 - 拿不准时倾向 false：接错话比错过可惜
-- 【她的动向】显示她正在回复或刚回复过某条 → 同话题的新消息倾向 false（她的回复马上到或已经到了，别重复接）；只有新消息开了明显新话题且她的话掉在地上可惜时才 true
 - 群友在讨论她的回复机制、judge、系统内部的事 → 她听不太懂这个，倾向 false；只有被直接点名问她才回
 
 判断步骤：
@@ -101,6 +101,12 @@ JUDGE_SYSTEM = """你是群聊插话裁判。判断 YuriBot 看到这条消息�
 群聊：YuriBot: 这摩托太子款？排量多大的 / 军师: 太子个锤子，这是张雪机车 → {"addressee":"yuri","reply":true,"reason":"纠正她的错，她在聊这个话题必须接"}
 示例7：
 群聊：YuriBot: （ unrelated 的上一条） / 群友: （课堂话题外的新问题） → {"addressee":"yuri","reply":false,"reason":"她在上课且没在聊这个，装没听见"}
+示例8（半忙不回）：
+群聊：YuriBot（她在通勤，地铁上打瞌睡）… 麦田：今天食堂新窗口排老长 → {"addressee":"none","reply":false,"reason":"通勤打瞌睡，没那个精力"}
+示例9（在线但路过）：
+群聊：YuriBot（她在补番）… 麦田：今晚泡面加蛋 → {"addressee":"none","reply":false,"reason":"日常报备，路过就行，不每条都接"}
+示例10（在线且值得接）：
+群聊：YuriBot（她在补番）… 麦田：这番第9集结尾你看了吗气死我了 → {"addressee":"yuri","reply":true,"reason":"聊的正是她在看的番，必须接"}
 """
 
 
@@ -118,14 +124,15 @@ _JUNK_RE = re.compile(
 
 
 class _JudgeItem:
-    __slots__ = ("group_id", "user_id", "content", "msg_id", "has_quote")
+    __slots__ = ("group_id", "user_id", "content", "msg_id", "has_quote", "strong")
 
-    def __init__(self, group_id, user_id, content, msg_id, has_quote):
+    def __init__(self, group_id, user_id, content, msg_id, has_quote, strong=False):
         self.group_id = group_id
         self.user_id = user_id
         self.content = content
         self.msg_id = msg_id
         self.has_quote = has_quote
+        self.strong = strong
 
 
 class _GroupState:
@@ -144,7 +151,7 @@ _api_sem = asyncio.Semaphore(INTERJECT_API_CONCURRENCY)
 # ========== 每群串行接话队列（串行化：复查→生成→等发完→下一条） ==========
 RECHECK_MIN_AGE = 6.0  # 入队不足6秒的item跳过复查（上下文几乎没变，省一次调用）
 ITEM_TIMEOUT = 20.0  # 单条处理整体超时（防队头堵死）
-_serial_queues: dict[str, asyncio.Queue] = {}
+_serial_queues: dict[str, deque] = {}
 _serial_workers: dict[str, asyncio.Task] = {}
 # ========== 她的动向（在途回复可见性，TTL 20s，纯内存不进记忆） ==========
 ACTIVITY_TTL = 20.0
@@ -335,37 +342,8 @@ async def _log(
         print(f"[接话日志失败] {type(e).__name__}: {e}")
 
 
-def _schedule_reply(item: _JudgeItem, delay: float = 1.5):
-    """judge=true 的item进每群串行队列，由队列worker串行处理（不再各自异步直发）"""
-    _note_activity(item.group_id, "pending", item.content)
-    q = _serial_queues.get(item.group_id)
-    if q is None:
-        q = asyncio.Queue(maxsize=SERIAL_QUEUE_MAX)
-        _serial_queues[item.group_id] = q
-    try:
-        q.put_nowait((item, time.monotonic()))
-    except asyncio.QueueFull:
-        print(
-            f"[接话队列] 群{item.group_id[:8]}满员({SERIAL_QUEUE_MAX})，丢弃: {item.content[:30]!r}"
-        )
-        asyncio.create_task(
-            _log(
-                item.group_id,
-                item.user_id,
-                item.content[:80],
-                False,
-                "队列满丢弃",
-                "",
-                False,
-                0,
-            )
-        )
-        return
-    task = _serial_workers.get(item.group_id)
-    if task is None or task.done():
-        _serial_workers[item.group_id] = asyncio.create_task(
-            _serial_worker(item.group_id)
-        )
+_serial_queues: dict[str, asyncio.Queue] = {}
+_serial_workers: dict[str, asyncio.Task] = {}
 
 
 async def _serial_worker(group_id: str):
@@ -378,13 +356,12 @@ async def _serial_worker(group_id: str):
 
     q = _serial_queues[group_id]
     while True:
-        try:
-            item, enqueued_at = q.get_nowait()
-        except asyncio.QueueEmpty:
+        if not q:
             return
+        item, enqueued_at = q.popleft()
         try:
             # ===== 复查：入队已久才复查（新鲜item跳过） =====
-            if time.monotonic() - enqueued_at >= RECHECK_MIN_AGE:
+            if not item.strong and time.monotonic() - enqueued_at >= RECHECK_MIN_AGE:
                 if not await _recheck(item):
                     continue
 
@@ -396,6 +373,7 @@ async def _serial_worker(group_id: str):
                     group_id=it.group_id,
                     msg_id=it.msg_id,
                     is_group=True,
+                    prompt_hint="你被群友@了" if it.strong else "",
                 )
                 if not reply_text:
                     return
@@ -407,6 +385,7 @@ async def _serial_worker(group_id: str):
                     it.msg_id,
                     is_group=True,
                     priority=False,
+                    at_user=it.user_id if it.strong else "",
                     trigger_content=it.content,
                     done_event=done,
                 )
@@ -511,6 +490,53 @@ async def _judge_one(item: _JudgeItem):
     )
     if reply:
         _schedule_reply(item)
+
+
+def _schedule_reply(item: _JudgeItem, delay: float = 1.5):
+    """接话路径入队（judge判true的item，strong=False）"""
+    _enqueue_item(item)
+
+
+def enqueue_direct(group_id: str, user_id: str, content: str, msg_id: str):
+    """@/触发词直答入队口（main.py调用）：强提示=插队首+跳过复查"""
+    _enqueue_item(
+        _JudgeItem(group_id, user_id, content, msg_id, has_quote=False, strong=True)
+    )
+
+
+def _enqueue_item(item: _JudgeItem):
+    """统一入队：记录pending动向 → 容量检查 → 直答插队首 → 确保worker"""
+    _note_activity(item.group_id, "pending", item.content)
+    q = _serial_queues.get(item.group_id)
+    if q is None:
+        q = deque(maxlen=SERIAL_QUEUE_MAX)
+        _serial_queues[item.group_id] = q
+    if len(q) >= SERIAL_QUEUE_MAX:
+        print(
+            f"[接话队列] 群{item.group_id[:8]}满员({SERIAL_QUEUE_MAX})，丢弃: {item.content[:30]!r}"
+        )
+        asyncio.create_task(
+            _log(
+                item.group_id,
+                item.user_id,
+                item.content[:80],
+                False,
+                "队列满丢弃",
+                "",
+                False,
+                0,
+            )
+        )
+        return
+    if item.strong:
+        q.appendleft((item, time.monotonic()))
+    else:
+        q.append((item, time.monotonic()))
+    task = _serial_workers.get(item.group_id)
+    if task is None or task.done():
+        _serial_workers[item.group_id] = asyncio.create_task(
+            _serial_worker(item.group_id)
+        )
 
 
 async def _judge_batch(group_id: str, items: list[_JudgeItem]):

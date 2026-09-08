@@ -302,29 +302,11 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
-            reply = await handle_chat(
-                clean_content,
-                user_id=user_id,
-                group_id=group_id,
-                msg_id=msg_id,
-                is_group=True,
-            )
-            if reply is None:
-                return
-            await send_text_chat(
-                group_id,
-                user_id,
-                reply,
-                msg_id,
-                is_group=True,
-                at_user=user_id,
-                priority=True,
-                trigger_content=clean_content,
-            )
-            await check_and_update_scene(group_id, user_id, "bot", reply)
+            from services.interject import enqueue_direct
+
+            await enqueue_direct(group_id, user_id, clean_content, msg_id)
 
         schedule(f"{group_id}:{user_id}", _do_reply)
-
     elif event == "GROUP_MESSAGE_CREATE":
         group_id = d["group_openid"]
         user_id = d["author"]["member_openid"]
@@ -395,26 +377,9 @@ async def process_event(data: dict):
         from core.debounce import schedule
 
         async def _do_reply():
-            reply = await handle_chat(
-                msg_to_record,
-                user_id=user_id,
-                group_id=group_id,
-                msg_id=msg_id,
-                is_group=True,
-            )
-            if reply is None:
-                return
-            await send_text_chat(
-                group_id,
-                user_id,
-                reply,
-                msg_id,
-                is_group=True,
-                at_user=user_id,
-                priority=True,
-                trigger_content=msg_to_record,
-            )
-            await check_and_update_scene(group_id, user_id, "bot", reply)
+            from services.interject import enqueue_direct
+
+            await enqueue_direct(group_id, user_id, msg_to_record, msg_id)
 
         schedule(f"{group_id}:{user_id}", _do_reply)
 
