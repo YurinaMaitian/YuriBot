@@ -89,6 +89,7 @@ _queues: dict[str, _GroupQ] = {}
 _running: set[str] = set()
 _seq_cursor: dict[str, int] = {}
 _SPLIT_RE = re.compile(r"(?<=[。！？!?…~])")
+_BAR_RE = re.compile(r"[|｜]")
 
 
 def _next_seq(msg_id: str) -> int:
@@ -110,7 +111,11 @@ def pack_bubbles(content: str) -> list[str]:
         para = para.strip()
         if not para:
             continue
-        sentences.extend(s.strip() for s in _SPLIT_RE.split(para) if s.strip())
+        for seg in _BAR_RE.split(para):  # 新增：竖线先切段
+            seg = seg.strip()
+            if not seg:
+                continue
+            sentences.extend(s.strip() for s in _SPLIT_RE.split(seg) if s.strip())
     if not sentences:
         return [text]
 
