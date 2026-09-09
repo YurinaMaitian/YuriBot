@@ -95,6 +95,8 @@ async def web_search(
             hit = cands[0]
             age = _age_seconds(hit["created_at"])
             if age < WEB_NOTES_TTL and not force_refresh:
+                print(f"[web_search] 缓存命中({hit['score']:.2f}): {query[:30]!r}")
+                await _log_search(group_id, query, "cache", freshness)
                 return f"（{int(age // 86400)}天前搜过）{hit['answer']}"
             hit_id = hit["id"]  # 过期 OR 强制刷新：记住旧ID，搜完覆盖写
     except Exception as e:
@@ -134,3 +136,41 @@ async def web_search(
         "（注意：以下信息来自不同日期的网页，数字打架时以日期最新的为准，别引用过期数据）\n"
         + digest
     )
+
+
+async def _log_search(group_id: str, query: str, source: str, freshness: str = ""):
+    """source: api=真搜索 / cache=缓存命中"""
+    try:
+        import aiosqlite
+        from services.db import DB_PATH
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""CREATE TABLE IF NOT EXISTS web_search_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT, query TEXT, source TEXT, freshness TEXT,
+                created_at TIMESTAMP)""")
+            await db.execute(
+                "INSERT INTO web_search_log (group_id, query, source, freshness, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (
+                    group_id,
+                    query[:80],
+                    source,
+                    freshness,
+                    datetime.now().isoformat(timespec="seconds"),
+                ),
+            )
+            await db.commit()
+    except Exception as e:
+        print(f"[搜索日志失败] {type(e).__name__}: {e}")
+
+
+
+
+
+
+
+
+
+
+

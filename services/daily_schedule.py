@@ -78,8 +78,9 @@ def _extract_json(raw: str) -> dict | None:
 
 def _validate(data: dict) -> tuple[bool, str]:
     """
-    归一化 + 清洗。返回 (是否可用, 修正说明)。
-    策略：清洗而非拒绝——坏块丢弃、重叠裁剪，至少剩 1 个合法时段就算成功。
+    归一化 + 清洗 + 语义校验。返回 (是否可用, 修正说明)。
+    策略：清洗而非拒绝——坏块丢弃、重叠裁剪，至少剩 1 个合法时段就算成功；
+    语义问题（时段词矛盾/事件不兼容）记入 notes，由 _generate 决定是否带反馈重试。
     """
     notes = []
     raw_blocks = data.get("blocks")
@@ -126,6 +127,11 @@ def _validate(data: dict) -> tuple[bool, str]:
         kept.append(b)
     data["blocks"] = kept
 
+    # 时段词一致性：晚修/晚自习 出现在白天 → 语义矛盾（触发带反馈重试）
+    for b in kept:
+        if any(w in b["activity"] for w in ("晚修", "晚自习")) and b["start"] < 17:
+            notes.append(f"时段词矛盾:{b['start']}点安排{b['activity'][:6]}")
+
     events = []
     for ev in data.get("events") or []:
         if not isinstance(ev, dict):
@@ -147,6 +153,8 @@ def _validate(data: dict) -> tuple[bool, str]:
     # 事件与所在时段的 activity 粗校验：上课/学校时段不允许宅家事件
     _SCHOOL_KW = ("上课", "学校", "晚自习", "自习")
     _HOME_KW = ("补番", "游戏", "谷子", "番", "宅", "漫画", "同", "打机")
+    _CAMPUS_KW = ("上课", "学校", "自习", "社团", "晚修", "晚自习", "考试", "测验")
+    _SPORT_KW = ("体育", "球", "跑", "运动会")
     ok_events = []
     for e in events:
         act = ""
@@ -156,6 +164,12 @@ def _validate(data: dict) -> tuple[bool, str]:
                 break
         if any(k in act for k in _SCHOOL_KW) and any(k in e["desc"] for k in _HOME_KW):
             notes.append(f"丢弃不兼容事件 {e['start']}-{e['end']}:{e['desc'][:12]}")
+            continue
+        # 反向兼容：体育/运动类事件不能在非校园时段（自习除外）
+        if any(k in e["desc"] for k in _SPORT_KW) and not any(
+            k in act for k in _CAMPUS_KW
+        ):
+            notes.append(f"事件不兼容 {e['start']}-{e['end']}:{e['desc'][:12]}")
             continue
         ok_events.append(e)
     data["events"] = ok_events[:1]
@@ -189,12 +203,16 @@ async def _generate(date_str: str, weekday: int):
         )
 
         data = None
+        last_note = ""
         for attempt in range(2):
-            hint = (
-                ""
-                if attempt == 0
-                else "\n\n（上次输出不合规：注意 blocks 覆盖全天、时段不重叠、严格 JSON、不要输出多余文字）"
-            )
+            hint = ""
+            if attempt > 0:
+                hint = (
+                    "\n\n（上次输出不合规：注意 blocks 覆盖全天、时段不重叠、严格 JSON、"
+                    "不要输出多余文字。"
+                    + (f"校验反馈：{last_note}" if last_note else "")
+                    + "）"
+                )
             raw = await get_ai_reply(
                 user_message=user_msg + hint,
                 system_override=GENERATE_SYSTEM.replace("{event_hint}", event_hint),
@@ -219,6 +237,13 @@ async def _generate(date_str: str, weekday: int):
                 print(
                     f"[日程] {date_str} 结构不可用(尝试{attempt + 1}): {note}; 原文: {(raw or '')[:300]!r}"
                 )
+                last_note = note
+                data = None
+                continue
+            # 语义问题（时段词矛盾/事件不兼容）也算未过：带具体反馈重试一次
+            if note and attempt == 0:
+                print(f"[日程] {date_str} 语义校验未过，带反馈重试: {note}")
+                last_note = note
                 data = None
                 continue
             if note:

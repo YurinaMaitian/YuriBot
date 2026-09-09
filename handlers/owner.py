@@ -393,7 +393,7 @@ async def stats_cmd(ctx):
     from datetime import datetime
     from config import DATA_DIR
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = ctx.raw.strip() or datetime.now().strftime("%Y-%m-%d")
     lines = []
 
     # ===== 1. AI 调用指标（jsonl 聚合） =====
@@ -430,6 +430,23 @@ async def stats_cmd(ctx):
 
     # ===== 2. judge / 表情包 / 反馈（SQLite 聚合） =====
     async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            async with db.execute(
+                "SELECT source, COUNT(*) FROM web_search_log"
+                " WHERE created_at >= ? GROUP BY source",
+                (today,),
+            ) as cur:
+                rows = dict(await cur.fetchall())
+            api_n, cache_n = rows.get("api", 0), rows.get("cache", 0)
+            if api_n or cache_n:
+                total = api_n + cache_n
+                lines.append(
+                    f"🔍 搜索: 真搜{api_n}次 缓存{cache_n}次"
+                    f"(命中率{cache_n * 100 // max(1, total)}%)"
+                )
+        except Exception:
+            pass
+
         async with db.execute(
             "SELECT COUNT(*), COALESCE(SUM(reply),0), COALESCE(AVG(judge_latency_ms),0)"
             " FROM interject_log WHERE created_at >= ?",
