@@ -191,14 +191,17 @@ async def handle_chat(
 
     from services import pdf_tool
 
-    doc_block = await pdf_tool.retrieve_for(group_id, content)
-    if doc_block:
-        prompt += (
-            "\n\n"
-            + doc_block
-            + "\n（上面是群里最近一份文档的相关内容；群友问文档内容时据此回答"
-            "并带上 P页码 引用，与文档无关则忽略此块。）"
-        )
+    if plan.get("docs"):
+        from services import pdf_tool
+
+        doc_block = await pdf_tool.retrieve_for(group_id, content)
+        if doc_block:
+            prompt += (
+                "\n\n"
+                + doc_block
+                + "\n（上面是群里文档的相关内容；群友问文档内容时据此回答"
+                "并带上 P页码 引用，与文档无关则忽略此块。）"
+            )
 
     if video_note:
         prompt += video_note

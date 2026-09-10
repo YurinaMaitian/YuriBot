@@ -11,12 +11,13 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
 - scene：情景记忆（之前聊过什么相关话题）
 - persona_bg：Bot 的自身背景事实（坐标、学校、家庭、外貌等设定）
 - slang：群梗/黑话/圈内新用法（消息里可能含有你不知道的圈内词、缩写、新梗）
+- docs：群里有已解析过的PDF文档（最近讨论过的）→ 当前消息在问/追问该文档的内容、数据、页码、细节时 true；闲聊或明显无关 → false
 - referenced_images：当前消息明确引用或追问的图片文件名列表。
 - register：当前群聊气氛 → "normal"（日常/玩闹）或 "solemn"（有群友真的在难过或场面沉重：宠物/亲人生病去世、告别、明显崩溃低落）。
   注意区分玩梗："我哭死""笑不活了""啊啊啊"是 normal。不确定一律 normal——误判 solemn 会让bot在欢腾场合乱严肃，代价更高。
 
 输出严格 JSON，不要解释，不要 markdown 代码块：
-{"time": true/false, "preference": true/false, "scene": true/false, "persona_bg": true/false, "slang": true/false, "register": "normal/solemn", "referenced_images": ["文件名"]}
+{"time": true/false, "preference": true/false, "scene": true/false, "persona_bg": true/false, "slang": true/false, "docs": true/false, "register": "normal/solemn", "referenced_images": ["文件名"]}
 
 判断规则：
 - 空消息/纯@ → 结合上文判断
@@ -25,6 +26,7 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
 - 追问"刚才""之前""你不是说" → scene
 - 问"你在哪""哪里人""住哪""哪个学校""多高""家里""背景"等自身设定 → persona_bg
 - 消息含圈内黑话/缩写/明显不合字面意思的新用法、或问"xx是什么意思/啥梗" → slang
+- 群友在追问刚读过的文档（"那个1.8%在第几页""第三章讲了啥""论文里复杂度是多少"这类） → docs
 - 判断 register 时看最近聊天记录的整体情绪：有人在认真倾诉悲伤/失去 → solemn；互相玩梗斗图 → normal
 - referenced_images 的判断（重要）：
   - 历史消息中可能出现旧格式【图片：描述】（全角冒号），那是没有文件名的旧记录，无法引用，一律不要列入 referenced_images
@@ -34,14 +36,17 @@ ROUTER_SYSTEM = """你是信息调度员。根据【最近聊天记录】和【�
   - "我刚发的图" → 当前发言者本人发的图，不一定是时间最近的那张
   - 当前消息与图片无关 → 必须为空数组
   - 找不到或超出记录范围 → 空数组"""
-
 _KEYS = ("time", "preference", "scene", "persona_bg", "slang")
 
 
 def _route_rule(user_msg: str) -> dict:
     """规则兜底：LLM 不可用时使用。register 无规则可判，保守 normal"""
     m = user_msg.lower()
-    base = {"referenced_images": [], "register": "normal"}
+    base = {
+        "referenced_images": [],
+        "register": "normal",
+        "docs": False,
+    }  # base 加 docs
     if any(
         k in m
         for k in [
@@ -171,6 +176,7 @@ def _parse_router_json(raw: str) -> dict | None:
         "scene": bool(plan.get("scene", False)),
         "persona_bg": bool(plan.get("persona_bg", False)),
         "slang": bool(plan.get("slang", False)),
+        "docs": bool(plan.get("docs", False)),  # 新增
         "register": register,
         "referenced_images": valid,
     }
