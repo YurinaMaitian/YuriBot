@@ -1,0 +1,99 @@
+{
+  "doc_name": "A_Comprehensive_Survey_on_Graph_Neural_Networks.pdf",
+  "doc_path": "test_pdfs/gnn_survey.pdf",
+  "questions": [
+    {
+      "id": "survey-01",
+      "dimension": "纯文本事实提取",
+      "question": "这篇综述提出的 GNN 新分类体系将现有 GNN 分为哪四个类别？",
+      "answer": "循环图神经网络（RecGNNs）、卷积图神经网络（ConvGNNs）、图自编码器（GAEs）、时空图神经网络（STGNNs）",
+      "anchor": "four categories,namely,recurrent GNNs",
+      "page": 1
+    },
+    {
+      "id": "survey-02",
+      "dimension": "纯文本事实提取",
+      "question": "Spectral CNN（Bruna et al. 2014）面临哪三个局限性？",
+      "answer": "① 图的任何扰动都会导致特征基改变；② 学到的滤波器依赖特定图域，无法应用到不同结构的图；③ 特征分解需要 O(n^3) 计算复杂度",
+      "anchor": "spectral CNN faces three limitations",
+      "page": 7
+    },
+    {
+      "id": "survey-03",
+      "dimension": "公式/符号重建",
+      "question": "ChebNet 如何用切比雪夫多项式参数化滤波器 g_θ？",
+      "answer": "g_theta = sum_{i=0}^{K} theta_i T_i(Lambda_tilde)，其中 Lambda_tilde = 2*Lambda/lambda_max - I_n，即对特征值对角矩阵做 K 阶切比雪夫展开",
+      "anchor": "Chebyshev polynomials of the diagonal matrix",
+      "page": 7
+    },
+    {
+      "id": "survey-04",
+      "dimension": "纯文本事实提取",
+      "question": "GCN 对 ChebNet 的一阶近似做了哪两个假设来简化卷积？",
+      "answer": "① 令 K=1；② 近似最大特征值 lambda_max=2（并进一步约束 theta=theta_0=-theta_1 以减少参数）",
+      "anchor": "approximation of ChebNet",
+      "page": 8
+    },
+    {
+      "id": "survey-05",
+      "dimension": "表格精确数值",
+      "question": "Table III 中列出时间复杂度为 O(n^3) 的方法有哪些？",
+      "answer": "Spectral CNN [19]、Henaff et al. [20]（因特征分解）、PGC-DGCNN [46]（因节点间最短路径计算）",
+      "anchor": "require eigenvalue decomposition, the time complexity is",
+      "page": 5
+    },
+    {
+      "id": "survey-06",
+      "dimension": "表格精确数值",
+      "question": "Table IV 中 Cluster-GCN 的内存复杂度是多少？与其他方法相比如何？",
+      "answer": "O(Ksd + Kd^2)，是所有方法中内存复杂度最低的",
+      "anchor": "realizes the lowest memory",
+      "page": 10,
+      "note": "表格题。精确数值 O(Ksd+Kd^2) 在 Table IV 表体内；PyPDF2 提取不到表体，正文 prose 锚 'Of all the methods, Cluster-GCN realizes the lowest memory' 在 page 10。若你的管线能提取表格，建议把 anchor 换回表内值以增强判定力度"
+    },
+    {
+      "id": "survey-07",
+      "dimension": "公式/符号重建",
+      "question": "GAT 注意力权重 alpha_vu^(k) 计算式中的激活函数 g(·) 是什么？",
+      "answer": "LeakyReLU，alpha = softmax(g(a^T [W h_v || W h_u]))，softmax 保证权重在邻居上归一化为 1",
+      "anchor": "a LeakyReLU activation function",
+      "page": 9
+    },
+    {
+      "id": "survey-08",
+      "dimension": "公式/符号重建",
+      "question": "DiffPool 在第 k 层学习的聚类分配矩阵 S^(k) 的维度是什么？",
+      "answer": "S^(k) 属于 R^{n_k x n_{k+1}}，其中 n_k 是第 k 层的节点数",
+      "anchor": "cluster assignment matrix S at layer k",
+      "page": 11
+    },
+    {
+      "id": "survey-09",
+      "dimension": "纯文本事实提取",
+      "question": "GIN 指出此前基于 MPNN 的方法存在什么表达能力缺陷，如何修正？",
+      "answer": "缺陷：无法区分不同图结构（表达能力受 WL 测试限制）；修正：引入可学习参数 epsilon^(k) 调整中心节点权重，h_v^(k) = MLP((1+epsilon^(k)) h_v^(k-1) + sum_{u in N(v)} h_u^(k-1))",
+      "anchor": "incapable of distinguishing different graph structures",
+      "page": 9
+    },
+    {
+      "id": "survey-10",
+      "dimension": "表格精确数值",
+      "question": "Table VI 中 Cora 数据集的节点数、特征数、类别数分别是多少？Reddit 数据集的边数是多少？",
+      "answer": "Cora：2708 节点、1433 特征、7 类；Reddit：11606919 条边",
+      "anchor": "Cora,Citeseer,Pubmed,PPI,and Reddit",
+      "page": 15,
+      "note": "表格题。数值证据全部在 Table VI 表体（page 16），PyPDF2 提取不到；此处锚定的是 page 15 正文中提及这些数据集名的句子。若你的管线能提取表格，建议把 anchor 换回 '11606919' 并把 page 改为 16"
+    }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+

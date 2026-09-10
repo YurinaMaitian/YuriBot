@@ -1,0 +1,101 @@
+{
+  "doc_name": "Deeper Insights into Graph Convolutional Networks.pdf",
+  "doc_path": "test_pdfs/deeper_gcn.pdf",
+  "questions": [
+    {
+      "id": "deeper-01",
+      "dimension": "纯文本事实提取",
+      "question": "论文的核心发现：GCN 中的图卷积本质上是哪种运算的特殊形式？",
+      "answer": "拉普拉斯平滑（Laplacian smoothing）的特殊形式，即对称拉普拉斯平滑：Y_hat = D_tilde^{-1/2} A_tilde D_tilde^{-1/2} X，它混合顶点及其邻居的特征，使同一簇内顶点特征趋同",
+      "anchor": "a special form of Laplacian smoothing",
+      "page": 1,
+      "note": "该 anchor 全文出现 3 次（abstract 与正文），chunk 级判定无碍；如需精确定位可用 'simply a special form of Laplacian smoothing'"
+    },
+    {
+      "id": "deeper-02",
+      "dimension": "公式/符号重建",
+      "question": "写出拉普拉斯平滑的矩阵形式，并说明 gamma=1 时对应什么。",
+      "answer": "Y_hat = X - gamma * D_tilde^{-1} * L_tilde * X = (I - gamma * D_tilde^{-1} * L_tilde) X；gamma=1 时只使用邻居特征，即标准形式的拉普拉斯平滑 Y_hat = D_tilde^{-1} A_tilde X",
+      "anchor": "weighted average of itself and its neighbors",
+      "page": 4
+    },
+    {
+      "id": "deeper-03",
+      "dimension": "公式/符号重建",
+      "question": "叙述 Theorem 1 关于过平滑（over-smoothing）在对称拉普拉斯情形下的收敛结论。",
+      "answer": "若图无二分图连通分量，则对任意 w 和 alpha 属于 (0,1]，lim_{m->inf} (I - alpha*L_sym)^m * w = D^{-1/2} [1^(1),...,1^(k)] * theta_2，即同一连通分量内所有顶点特征收敛到与顶点度平方根成正比的相同值，导致不可区分",
+      "anchor": "converge to a linear combination of",
+      "page": 4
+    },
+    {
+      "id": "deeper-04",
+      "dimension": "纯文本事实提取",
+      "question": "Zachary 空手道俱乐部数据集有多少顶点、边、类别？可视化实验中几层 GCN 时两类点分离效果最好？",
+      "answer": "34 个顶点、78 条边、2 个类别；2 层 GCN 时分离效果最好，层数继续增加则过平滑使两类混合",
+      "anchor": "34vertices of two classes and 78edges",
+      "page": 4
+    },
+    {
+      "id": "deeper-05",
+      "dimension": "公式/符号重建",
+      "question": "协同训练（Co-Training）中 ParWalks 的吸收概率矩阵如何计算？实验中 alpha 和 Lambda 的取值是什么？",
+      "answer": "P = (L + alpha*Lambda)^{-1}（闭式解，P_{i,j} 表示从 i 出发的随机游走被 j 吸收的概率）；实验中 Lambda = I，alpha = 10^{-6}",
+      "anchor": "absorption probability matrix",
+      "page": 5
+    },
+    {
+      "id": "deeper-06",
+      "dimension": "公式/符号重建",
+      "question": "论文如何估计训练一个 tau 层 GCN 所需标签数的下界 eta？实验中实际使用了多少？",
+      "answer": "解 (d_hat)^tau * eta ~ n，其中 d_hat 为平均度、n 为节点总数；实验中实际使用 3*eta 个标签（2*eta、3*eta、4*eta 表现相近）",
+      "anchor": "estimate the lower bound of the number of labels",
+      "page": 6
+    },
+    {
+      "id": "deeper-07",
+      "dimension": "表格精确数值",
+      "question": "Table 1 中，Cora 上 20 标签/类时，一层 FCN、两层 FCN、一层 GCN、两层 GCN 的准确率分别是多少？",
+      "answer": "一层 FCN：0.530860；两层 FCN：0.559260；一层 GCN：0.707940；两层 GCN：0.798361",
+      "anchor": "0.798361",
+      "page": 3
+    },
+    {
+      "id": "deeper-08",
+      "dimension": "表格精确数值",
+      "question": "Table 3 中，Cora 上标签率 1% 时，Union 方法和 GCN+V 的准确率各是多少？",
+      "answer": "Union：69.9%；GCN+V：62.3%（Union 高出约 7.6 个百分点）",
+      "anchor": "69.9",
+      "page": 7,
+      "note": "'69.9' 全文出现 2 次，chunk 级判定可能命中另一处；如需唯一锚可换 '75.9' 所在 Union 行其他单元格或给脚本加 page 约束"
+    },
+    {
+      "id": "deeper-09",
+      "dimension": "纯文本事实提取",
+      "question": "Kipf & Welling 的 GCN+V 训练中额外使用了多少验证标签？作者认为这有何问题？",
+      "answer": "额外 500 个标签（远多于训练标签总数）；问题：违背半监督学习减少标注成本的初衷，且使 GCN 与标签传播等不需要验证集的方法的比较不公平",
+      "anchor": "500labeled data for validation",
+      "page": 5,
+      "note": "page 2 的 '500 additional labels' 在提取时发生换行断词（addi-tional），故改取 page 5 的 'an additional set of 500 labeled data for validation'，无断词"
+    },
+    {
+      "id": "deeper-10",
+      "dimension": "纯文本事实提取",
+      "question": "实验中 GCN 的超参数设置是什么？Chebyshev 滤波器（Cheby）表现不佳的原因是什么？",
+      "answer": "学习率 0.01、最多 200 epochs、dropout 0.5、l2 正则 5e-4、2 个卷积层、16 个隐藏单元；Cheby 表现不佳的原因是过拟合（overfitting）",
+      "anchor": "0:5dropout rate",
+      "page": 6,
+      "note": "PyPDF2 把句点渲染成冒号（0:5）；若你的管线输出 0.5，anchor 应为 '0.5dropout rate'"
+    }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,98 @@
+{
+  "doc_name": "Convolutional_Neural_Networks_on_Graphs_with_Fast_Localized_Spectral_Filtering.pdf",
+  "doc_path": "test_pdfs/chebnet.pdf",
+  "questions": [
+    {
+      "id": "chebnet-01",
+      "dimension": "纯文本事实提取",
+      "question": "论文的三位作者来自哪个机构？",
+      "answer": "EPFL（瑞士洛桑联邦理工学院），Lausanne, Switzerland",
+      "anchor": "EPFL,Lausanne,Switzerland",
+      "page": 1
+    },
+    {
+      "id": "chebnet-02",
+      "dimension": "纯文本事实提取",
+      "question": "论文依据哪个引理证明 K 阶多项式谱滤波器是严格 K-局部化的（即限制在中心节点 K 跳半径内）？",
+      "answer": "依据 [Hammond et al. 2011, Lemma 5.2]：若最短路径距离 d_G(i,j) > K，则 (L^K)_{i,j} = 0",
+      "anchor": "Lemma 5.2",
+      "page": 3
+    },
+    {
+      "id": "chebnet-03",
+      "dimension": "纯文本事实提取",
+      "question": "所提滤波方法的计算复杂度是多少？相对于非参数滤波 O(n^2) 的改进来自哪里？",
+      "answer": "O(K*|E|)。改进来自：参数化为缩放拉普拉斯 L_tilde 的切比雪夫多项式并递归计算，只需 K 次稀疏矩阵-向量乘法，绕开了图傅里叶基 U 的显式乘法（O(n^2)）和存储",
+      "anchor": "computed recursively from L",
+      "page": 3
+    },
+    {
+      "id": "chebnet-04",
+      "dimension": "公式/符号重建",
+      "question": "写出切比雪夫多项式的稳定递推关系。",
+      "answer": "T_k(x) = 2x*T_{k-1}(x) - T_{k-2}(x)，初始 T_0 = 1，T_1 = x",
+      "anchor": "stable recurrence relation",
+      "page": 3
+    },
+    {
+      "id": "chebnet-05",
+      "dimension": "纯文本事实提取",
+      "question": "图粗化（coarsening）使用的是什么算法？其贪心匹配规则选择的谱聚化目标是什么？",
+      "answer": "Graclus 多层级聚类算法（基于 Metis）；目标为归一化割（normalized cut），贪心规则匹配使 W_ij(1/d_i + 1/d_j) 最大的未标记邻居，每级节点数约减半",
+      "anchor": "maximizes the local normalized cut",
+      "page": 4
+    },
+    {
+      "id": "chebnet-06",
+      "dimension": "图表/算法理解",
+      "question": "图 2 的池化示例中，原始图 G_0 有 8 个节点，经 Graclus 两级粗化后 G_1、G_2 各有多少节点？",
+      "answer": "G_1 有 5 个节点（补 1 个伪节点到 6），G_2 有 3 个节点（G_0 补 4 个伪节点到 12，构成平衡二叉树）",
+      "anchor": "n2=3",
+      "page": 5
+    },
+    {
+      "id": "chebnet-07",
+      "dimension": "表格精确数值",
+      "question": "Table 1 中，所提图 CNN 与经典 CNN 在 MNIST 上的准确率分别是多少？",
+      "answer": "图 CNN（GC32-P4-GC64-P4-FC512）：99.14%；经典 CNN（C32-P4-C64-P4-FC512）：99.33%",
+      "anchor": "99.33",
+      "page": 6
+    },
+    {
+      "id": "chebnet-08",
+      "dimension": "纯文本事实提取",
+      "question": "MNIST 实验构建的 8-NN 图有多少节点和边？20NEWS 实验的 16-NN 词图呢？",
+      "answer": "MNIST：976 个节点（784 像素 + 192 伪节点）、3198 条边；20NEWS：10000 个节点、132834 条边",
+      "anchor": "132;834",
+      "page": 7,
+      "note": "PDF 中该句的逗号在提取时被渲染成分号：n=|V|=10;000 nodes and |E|=132;834 edges。若你的管线保留逗号，anchor 应为 '132,834'"
+    },
+    {
+      "id": "chebnet-09",
+      "dimension": "纯文本事实提取",
+      "question": "论文为什么没有采用 Lanczos 算法来加速图滤波，而是选择了切比雪夫展开？",
+      "answer": "Lanczos 算法构造 Krylov 子空间的正交基虽有吸引力（系数独立），但实现更复杂（more convoluted），因此留作未来工作",
+      "anchor": "more convoluted and thus left as a future",
+      "page": 3
+    },
+    {
+      "id": "chebnet-10",
+      "dimension": "表格精确数值",
+      "question": "图质量影响实验中，将 8-NN 网格图替换为随机图后，两层网络（GC32-P4-GC64-P4-FC512）的准确率从多少降到多少？",
+      "answer": "从 99.14% 降到 95.39%，说明模型性能严重依赖图结构满足局部性、平稳性和组合性假设",
+      "anchor": "95.39",
+      "page": 8
+    }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+
