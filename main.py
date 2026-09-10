@@ -124,12 +124,17 @@ def _strip_face_tags(content: str) -> str:
     return content
 
 
-def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
+def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict], list[dict]]:
     """
     提取消息内容 + 图片附件。
     支持：纯文字、纯图片、文字+图片混合（attachments 或 markdown 内嵌）。
     返回：(处理后的文本, 图片列表)
     """
+    atts = d.get("attachments", [])
+    if atts:
+        print(
+            f"[附件调试] {[(a.get('content_type'), a.get('filename'), str(a.get('size'))) for a in atts]}"
+        )
     content = _strip_face_tags(d.get("content", "").strip())
     attachments = d.get("attachments", [])
 
@@ -139,7 +144,12 @@ def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
     attachments = list(attachments) + quote_images
 
     images = [a for a in attachments if a.get("content_type", "").startswith("image/")]
-
+    pdfs = [
+        a
+        for a in attachments
+        if (a.get("filename") or "").lower().endswith(".pdf")
+        or "pdf" in (a.get("content_type") or "").lower()
+    ]
     # QQ 混合消息：图片以 markdown 形式内嵌在 content 里
     md_images: list[dict] = []
 
@@ -167,13 +177,30 @@ def _extract_content_with_attachments(d: dict) -> tuple[str, list[dict]]:
     if images and not content:
         content = "[图片]"
 
-    return content, images
+    return content, images, pdfs
 
 
 def _has_trigger_word(raw_content: str) -> bool:
     """触发词判断：先剥 URL 防误触，词边界匹配 bot"""
     text = _URL_RE.sub("", raw_content).lower()
     return "yuri" in text or bool(_TRIGGER_BOT_RE.search(text))
+
+
+async def _process_files(content: str, pdfs: list[dict], group_id: str = "") -> str:
+    """PDF附件：占位符进记忆 + 后台下载登记（URL几小时过期，必须当场落盘）"""
+    if not pdfs:
+        return content
+    from services import pdf_tool
+
+    for p in pdfs:
+        filename = p.get("filename") or "file.pdf"
+        content += f"【文件:{filename}】"
+        asyncio.create_task(
+            pdf_tool.download_and_register(
+                p.get("url", ""), filename, p.get("size", 0), group_id, ""
+            )
+        )
+    return content
 
 
 async def _process_images(content: str, images: list[dict], group_id: str = "") -> str:
@@ -229,8 +256,9 @@ async def process_event(data: dict):
     # ---------- 私聊 ----------
     if event == "C2C_MESSAGE_CREATE":
         user_id = d["author"]["id"]
-        content, images = _extract_content_with_attachments(d)
+        content, images, pdfs = _extract_content_with_attachments(d)
         content = await _process_images(content, images)
+        content = await _process_files(content, pdfs)
 
         nick = await get_nickname(user_id)
         print(f"[私聊] {nick}: {content[:120]}")
@@ -263,7 +291,7 @@ async def process_event(data: dict):
         clean_content = await normalize_mentions(clean_content)
 
         # 提取 attachments + 引用 + 图片占位（后台解析，不阻塞）
-        clean_content, images = _extract_content_with_attachments(
+        clean_content, images, pdfs = _extract_content_with_attachments(
             {
                 "content": clean_content,
                 "attachments": d.get("attachments", []),
@@ -271,6 +299,7 @@ async def process_event(data: dict):
             }
         )
         clean_content = await _process_images(clean_content, images, group_id)
+        clean_content = await _process_files(clean_content, pdfs, group_id)
 
         nick = await get_nickname(user_id)
         gname = await get_group_name(group_id)
@@ -315,7 +344,7 @@ async def process_event(data: dict):
         is_at_bot, clean_content = _detect_at_bot(raw_content)
 
         # 提取 attachments
-        clean_content, images = _extract_content_with_attachments(
+        clean_content, images, pdfs = _extract_content_with_attachments(
             {
                 "content": clean_content,
                 "attachments": d.get("attachments", []),
@@ -330,6 +359,7 @@ async def process_event(data: dict):
         base_content = await normalize_mentions(base_content)
         base_content = _strip_face_tags(base_content)
         msg_to_record = await _process_images(base_content, images, group_id)
+        msg_to_record = await _process_files(msg_to_record, pdfs, group_id)
 
         # 群状态管理
         state = load_state()
@@ -398,6 +428,9 @@ async def lifespan(app: FastAPI):
     from services.vector_store import init_slang_collection
     from services.slang_store import init_slang_table
     from services.vector_store import init_web_notes_collection
+    from services.pdf_tool import init_pdf_tables
+
+    await init_pdf_tables()
 
     await init_web_notes_collection()
     await init_slang_table()
