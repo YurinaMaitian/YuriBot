@@ -8,8 +8,21 @@ import os
 import time
 
 import aiosqlite
+import random
+import asyncio
 
-from config import DATA_DIR
+from services.db import DB_PATH as _DB  # 复用（文件顶部已有 DB_PATH）
+from services.embedding import embed_text
+from services import vector_store
+from core.ai import get_ai_reply, SYSTEM_PROMPT
+from services.pdf_parser import extract_blocks, chunk_blocks, ScannedPdfError
+
+from config import (
+    DATA_DIR,
+    LIGHT_MODEL_NAME,
+    LIGHT_MODEL_URL,
+    LIGHT_MODEL_KEY,
+)
 from services.db import DB_PATH
 from services.http import get_session
 
@@ -22,6 +35,200 @@ STATUS_PROCESSING = "processing"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_REJECTED = "rejected"
+
+
+_SEM = asyncio.Semaphore(3)
+SECTION_BUDGET = 1800  # 一个章节桶塞进一次 4B 调用的字符预算
+MAX_PAGES = 150
+
+
+def _path_of(doc_id: str) -> str:
+    return os.path.join(PDF_DIR, f"{doc_id}.pdf")
+
+
+async def _set_status(doc_id, status, reason="", summary="", page_count=0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pdf_docs SET status=?, reject_reason=?, summary=?, page_count=?"
+            " WHERE doc_id=?",
+            (status, reason, summary[:2000], page_count, doc_id),
+        )
+        await db.commit()
+
+
+async def _find_doc(group_id: str, prefix: str = ""):
+    """按群 + 文件名前缀定位；无前缀取该群最新一份"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if prefix:
+            async with db.execute(
+                "SELECT doc_id, filename, status FROM pdf_docs"
+                " WHERE group_id=? AND filename LIKE ?"
+                " ORDER BY created_at DESC LIMIT 1",
+                (group_id, prefix + "%"),
+            ) as cur:
+                return await cur.fetchone()
+        async with db.execute(
+            "SELECT doc_id, filename, status FROM pdf_docs"
+            " WHERE group_id=? ORDER BY created_at DESC LIMIT 1",
+            (group_id,),
+        ) as cur:
+            return await cur.fetchone()
+
+
+def _batches_by_section(chunks) -> list[tuple[str, list]]:
+    """按 section_path 分桶，每桶再按预算切成若干批"""
+    buckets, order = {}, []
+    for c in chunks:
+        key = c.section_path or "(无章节)"
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(c)
+    batches = []
+    for key in order:
+        buf, size = [], 0
+        for c in buckets[key]:
+            if buf and size + len(c.text) > SECTION_BUDGET:
+                batches.append((key, buf))
+                buf, size = [], 0
+            buf.append(c)
+            size += len(c.text)
+        if buf:
+            batches.append((key, buf))
+    return batches
+
+
+MAP_SYSTEM = (
+    "你是文献要点提取员。用2-4句话概括给定段落的要点。只输出要点，不解释、不寒暄。"
+)
+REDUCE_USER = (
+    "你刚读完群友发的一份PDF。以下是各章节的要点：\n\n{points}\n\n"
+    "用你平时的说话方式给群友做总结：先一句话说这是什么文档，然后分章节说核心内容"
+    "（每章一两句），最后加一句你自己的看法。总共200字以内，别端着。"
+)
+
+
+async def _map_batch(section: str, chunk_list: list) -> str:
+    body = "\n".join(f"[P{c.page_start}] {c.text[:600]}" for c in chunk_list)
+    raw = await get_ai_reply(
+        user_message=f"【章节】{section}\n\n{body}",
+        system_override=MAP_SYSTEM,
+        max_tokens=200,
+        temperature=0.2,
+        model=LIGHT_MODEL_NAME,
+        api_url=LIGHT_MODEL_URL,
+        api_key=LIGHT_MODEL_KEY,
+        timeout=60,
+        enable_thinking=False,
+        tag="pdf_map",
+    )
+    return raw or "（该章节未能提取要点）"
+
+
+async def process_doc(doc_id: str, group_id: str, msg_id: str) -> None:
+    """完整管线：解析→分块→入库→章节级Map→Reduce→交付。fire-and-forget。"""
+    from services.sender import enqueue_chat
+
+    try:
+        await _set_status(doc_id, STATUS_PROCESSING)
+        blocks, page_count = extract_blocks(_path_of(doc_id))
+        if page_count > MAX_PAGES:
+            await _set_status(doc_id, STATUS_REJECTED, f"超过{MAX_PAGES}页")
+            return
+        chunks = chunk_blocks(blocks)
+        await _set_status(doc_id, STATUS_PROCESSING, page_count=page_count)
+
+        # 清单落库
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executemany(
+                "INSERT INTO pdf_chunks (doc_id, idx, page_start, page_end,"
+                " section_path, char_len) VALUES (?,?,?,?,?,?)",
+                [
+                    (
+                        doc_id,
+                        c.idx,
+                        c.page_start,
+                        c.page_end,
+                        c.section_path,
+                        len(c.text),
+                    )
+                    for c in chunks
+                ],
+            )
+            await db.commit()
+
+        # 向量化入库（Semaphore 限流保护免费 embedding API）
+        embed_fail = 0
+
+        async def _embed_one(c):
+            nonlocal embed_fail
+            try:
+                vector = await embed_text(c.text[:800])
+                await vector_store.upsert_doc_point(
+                    random.getrandbits(63),
+                    doc_id,
+                    c.text,
+                    c.page_start,
+                    c.page_end,
+                    c.section_path,
+                    "chunk",
+                    group_id,
+                    vector,
+                )
+            except Exception:
+                embed_fail += 1
+
+        await asyncio.gather(*[_embed_one(c) for c in chunks])
+        if embed_fail > len(chunks) // 2:
+            await _set_status(
+                doc_id, STATUS_FAILED, f"入库失败{embed_fail}/{len(chunks)}"
+            )
+            return
+
+        # 章节级 Map
+        batches = _batches_by_section(chunks)
+        print(f"[PDF] Map 开始: {len(batches)} 批 / {len(chunks)} chunks")
+
+        async def _map_one(i, sec, cls):
+            async with _SEM:
+                r = await _map_batch(sec, cls)
+                print(f"[PDF] Map {i + 1}/{len(batches)} [{sec[:16]}] ok")
+                return sec, r
+
+        results = await asyncio.gather(
+            *[_map_one(i, s, c) for i, (s, c) in enumerate(batches)]
+        )
+        points = "\n\n".join(f"【{s}】\n{r}" for s, r in results)
+
+        # Reduce：DS 用人设做最终总结
+        summary = await get_ai_reply(
+            user_message=REDUCE_USER.format(points=points),
+            system_override=SYSTEM_PROMPT,
+            max_tokens=800,
+            temperature=0.7,
+            tag="pdf_reduce",
+        )
+        if not summary:
+            await _set_status(doc_id, STATUS_FAILED, "reduce空响应")
+            return
+        await _set_status(doc_id, STATUS_DONE, summary=summary)
+
+        # 异步交付（发群里；[文件] 前缀让 DS 知道她读过）
+        await enqueue_chat(
+            group_id,
+            "",
+            f"[文件] {summary}",
+            msg_id,
+            is_group=True,
+            memory_tag="[文件] ",
+        )
+        print(f"[PDF] done: {doc_id[:8]} 页数{page_count} chunks{len(chunks)}")
+    except ScannedPdfError as e:
+        await _set_status(doc_id, STATUS_REJECTED, str(e))
+        print(f"[PDF] 拒收: {doc_id[:8]} {e}")
+    except Exception as e:
+        await _set_status(doc_id, STATUS_FAILED, type(e).__name__)
+        print(f"[PDF] 处理失败: {type(e).__name__}: {e}")
 
 
 async def init_pdf_tables():
@@ -116,3 +323,26 @@ async def download_and_register(
     except Exception as e:
         print(f"[PDF] 下载/登记失败: {type(e).__name__}: {e}")
         await _insert(group_id, filename, 0, STATUS_FAILED, type(e).__name__, now)
+
+
+async def retrieve_for(group_id: str, query: str, top_k: int = 3) -> str | None:
+    """该群最近一份 done 文档 + 问题 → 带页码的要点块；无文档/无命中返回 None"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT doc_id, filename FROM pdf_docs"
+            " WHERE group_id=? AND status='done'"
+            " ORDER BY created_at DESC LIMIT 1",
+            (group_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return None
+    doc_id, filename = row
+    vector = await embed_text(query[:200])
+    hits = await vector_store.search_doc_chunks(doc_id, vector, top_k=top_k)
+    if not hits:
+        return None
+    lines = [f"【文档要点】《{filename}》相关内容："]
+    for h in hits:
+        lines.append(f"- (P{h['page_start']}-{h['page_end']}) {h['text'][:150]}")
+    return "\n".join(lines)

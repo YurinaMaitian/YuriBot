@@ -505,3 +505,63 @@ async def stats_cmd(ctx):
             pass
 
     return "\n".join(lines)
+
+
+from services import pdf_tool
+
+
+@cmd(
+    "pdf",
+    desc="[主人] 解析群里的PDF：/pdf [文件名前缀]，或查看已解析的总结",
+    hidden=True,
+)
+async def pdf_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    if not ctx.is_group:
+        return "这个指令只能在群聊用～"
+    hit = await pdf_tool._find_doc(ctx.group_id, ctx.raw.strip())
+    if not hit:
+        return "这个群还没有登记过 PDF，先发一份上来"
+    doc_id, filename, status = hit
+    if status == pdf_tool.STATUS_DONE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT summary FROM pdf_docs WHERE doc_id=?", (doc_id,)
+            ) as cur:
+                row = await cur.fetchone()
+        return f"📄 {filename}\n{row[0] if row else ''}"
+    if status == pdf_tool.STATUS_PROCESSING:
+        return "还在看，等下～"
+    if status in (pdf_tool.STATUS_REJECTED, pdf_tool.STATUS_FAILED):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT reject_reason FROM pdf_docs WHERE doc_id=?", (doc_id,)
+            ) as cur:
+                row = await cur.fetchone()
+        return f"这份看不了：{row[0] if row else status}"
+    # pending → 启动处理
+    asyncio.create_task(pdf_tool.process_doc(doc_id, ctx.group_id, ctx.msg_id))
+    return f"行，等我翻翻《{filename}》，看完叫你"
+
+
+@cmd(
+    "pdfdel",
+    desc="[主人] 删除PDF记录并重置：/pdfdel [文件名前缀]，重处理不用再发文件",
+    hidden=True,
+)
+async def pdfdel_cmd(ctx):
+    if not _is_owner(ctx.user_id):
+        return "⛔ 你没有权限使用这个指令"
+    hit = await pdf_tool._find_doc(ctx.group_id, ctx.raw.strip())
+    if not hit:
+        return "没找到对应记录"
+    doc_id, filename, status = hit
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM pdf_docs WHERE doc_id=?", (doc_id,))
+        await db.execute("DELETE FROM pdf_chunks WHERE doc_id=?", (doc_id,))
+        await db.commit()
+    from services import vector_store
+
+    await vector_store.delete_doc_points(doc_id)
+    return f"🗑 已删除《{filename}》的记录（文件还在磁盘上），重新 /pdf 即可再处理"

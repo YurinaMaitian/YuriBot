@@ -106,18 +106,21 @@ def pack_bubbles(content: str) -> list[str]:
     text = content.strip()
     if not text:
         return []
+    # 软换行合并：行尾无句末标点则与下一行拼接（防公式/英文被换行腰斩）
+    lines = [l.strip() for l in re.split(r"\n+", text) if l.strip()]
+    norm_lines: list[str] = []
+    for l in lines:
+        if norm_lines and not re.search(r"[。！？!?…~]$", norm_lines[-1]):
+            norm_lines[-1] += l
+        else:
+            norm_lines.append(l)
     sentences: list[str] = []
-    for para in re.split(r"\n+", text):
-        para = para.strip()
-        if not para:
-            continue
-        for seg in _BAR_RE.split(para):  # 新增：竖线先切段
+    for para in norm_lines:
+        for seg in _BAR_RE.split(para):
             seg = seg.strip()
             if not seg:
                 continue
             sentences.extend(s.strip() for s in _SPLIT_RE.split(seg) if s.strip())
-    if not sentences:
-        return [text]
 
     bubbles: list[str] = []
     cur = ""

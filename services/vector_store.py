@@ -15,6 +15,73 @@ MEMES_COLLECTION = "memes"
 
 _client = None
 
+# ========== 文档库（docs：PDF chunk + 章节摘要） ==========
+DOCS_COLLECTION = "docs"
+
+
+async def init_docs_collection():
+    client = _get_client()
+    try:
+        collections = await client.get_collections()
+        if DOCS_COLLECTION in [c.name for c in collections.collections]:
+            print(f"[Qdrant] Collection '{DOCS_COLLECTION}' 已存在")
+            return
+        await client.create_collection(
+            collection_name=DOCS_COLLECTION,
+            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        )
+        print(f"[Qdrant] Collection '{DOCS_COLLECTION}' 创建成功")
+    except Exception as e:
+        print(f"[Qdrant] docs 初始化失败: {e}")
+
+
+async def upsert_doc_point(
+    point_id: int,
+    doc_id: str,
+    text: str,
+    page_start: int,
+    page_end: int,
+    section_path: str,
+    kind: str,
+    group_id: str,
+    vector: list[float],
+):
+    client = _get_client()
+    try:
+        await client.upsert(
+            collection_name=DOCS_COLLECTION,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "doc_id": doc_id,
+                        "text": text[:800],
+                        "page_start": page_start,
+                        "page_end": page_end,
+                        "section_path": section_path[:100],
+                        "kind": kind,  # "chunk" | "section_summary"
+                        "group_id": group_id,
+                    },
+                )
+            ],
+        )
+    except Exception as e:
+        print(f"[Qdrant] doc 入库失败: {e}")
+
+
+async def delete_doc_points(doc_id: str):
+    client = _get_client()
+    try:
+        await client.delete(
+            collection_name=DOCS_COLLECTION,
+            points_selector=Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+            ),
+        )
+    except Exception as e:
+        print(f"[Qdrant] doc 删点失败 {doc_id[:8]}: {e}")
+
 
 def _get_client() -> AsyncQdrantClient:
     global _client
@@ -349,4 +416,32 @@ async def search_web_notes(query_vector: list[float], top_k: int = 1) -> list[di
         ]
     except Exception as e:
         print(f"[Qdrant] web_notes 检索失败: {e}")
+        return []
+
+
+async def search_doc_chunks(
+    doc_id: str, query_vector: list[float], top_k: int = 3
+) -> list[dict]:
+    client = _get_client()
+    try:
+        results = await client.search(
+            collection_name=DOCS_COLLECTION,
+            query_vector=query_vector,
+            query_filter=Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+            ),
+            limit=top_k,
+            with_payload=True,
+        )
+        return [
+            {
+                "text": r.payload.get("text", ""),
+                "page_start": r.payload.get("page_start", 0),
+                "page_end": r.payload.get("page_end", 0),
+                "section_path": r.payload.get("section_path", ""),
+            }
+            for r in results
+        ]
+    except Exception as e:
+        print(f"[Qdrant] docs 检索失败: {e}")
         return []

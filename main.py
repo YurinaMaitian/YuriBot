@@ -333,7 +333,7 @@ async def process_event(data: dict):
         async def _do_reply():
             from services.interject import enqueue_direct
 
-            await enqueue_direct(group_id, user_id, clean_content, msg_id)
+            enqueue_direct(group_id, user_id, clean_content, msg_id)
 
         schedule(f"{group_id}:{user_id}", _do_reply)
     elif event == "GROUP_MESSAGE_CREATE":
@@ -429,6 +429,9 @@ async def lifespan(app: FastAPI):
     from services.slang_store import init_slang_table
     from services.vector_store import init_web_notes_collection
     from services.pdf_tool import init_pdf_tables
+    from services.vector_store import init_docs_collection
+
+    await init_docs_collection()
 
     await init_pdf_tables()
 

@@ -23,12 +23,14 @@ async def send_text(
         if is_group
         else f"https://api.sgroup.qq.com/v2/users/{user_id}/messages"
     )
+    from services.sender import _next_seq
 
     at_id = (
         at_user if (at_user and is_group and is_reply_at_enabled(load_state())) else ""
     )
-    await send_split_message(url, content, msg_id, at_user_id=at_id)
-
+    await send_split_message(
+        url, content, msg_id, at_user_id=at_id, msg_seq_start=_next_seq(msg_id)
+    )
     target_id = group_id if is_group else user_id
     await record_message(target_id, user_id, "bot", f"{memory_tag}{content}")
 
