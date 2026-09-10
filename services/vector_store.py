@@ -45,6 +45,7 @@ async def upsert_doc_point(
     kind: str,
     group_id: str,
     vector: list[float],
+    idx: int = 0,
 ):
     client = _get_client()
     try:
@@ -62,6 +63,7 @@ async def upsert_doc_point(
                         "section_path": section_path[:100],
                         "kind": kind,  # "chunk" | "section_summary"
                         "group_id": group_id,
+                        "idx": idx,
                     },
                 )
             ],

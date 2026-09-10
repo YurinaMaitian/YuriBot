@@ -6,6 +6,8 @@ D1 下午交付：登记 + 下载。解析触发（/pdf 命令 / read_pdf tool�
 import hashlib
 import os
 import time
+import math
+import numpy as np
 
 import aiosqlite
 import random
@@ -35,11 +37,56 @@ STATUS_PROCESSING = "processing"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_REJECTED = "rejected"
+_chunk_cache: dict[
+    str, list
+] = {}  # doc_id → [(idx,text,page_start,page_end,section_path)]
 
 
 _SEM = asyncio.Semaphore(3)
 SECTION_BUDGET = 1800  # 一个章节桶塞进一次 4B 调用的字符预算
 MAX_PAGES = 150
+
+
+def _trigrams(s: str) -> list[str]:
+    s = "".join(s.split()).lower()
+    return [s[i : i + 3] for i in range(len(s) - 2)] or [s]
+
+
+def _bm25(query: str, texts: list[str]) -> np.ndarray:
+    docs = [_trigrams(t) for t in texts]
+    q = set(_trigrams(query))
+    N = len(docs)
+    df = {t: sum(1 for d in docs if t in d) for t in q}
+    idf = {t: math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5)) for t in q}
+    avg = sum(len(d) for d in docs) / max(1, N)
+    scores = np.zeros(N, dtype=np.float32)
+    for i, d in enumerate(docs):
+        s_ = sum(
+            idf[t]
+            * (d.count(t) * 2.5 / (d.count(t) + 1.5 * (1 - 0.75 + 0.75 * len(d) / avg)))
+            for t in q
+            if d.count(t)
+        )
+        scores[i] = s_
+    return scores
+
+
+async def _load_chunks(doc_id: str) -> list:
+    if doc_id in _chunk_cache:
+        return _chunk_cache[doc_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT idx, text, page_start, page_end, section_path"
+            " FROM pdf_chunks WHERE doc_id=? ORDER BY idx",
+            (doc_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    _chunk_cache[doc_id] = rows
+    return rows
+
+
+def _is_refs(section_path: str) -> bool:
+    return "reference" in (section_path or "").lower()
 
 
 def _path_of(doc_id: str) -> str:
@@ -142,7 +189,7 @@ async def process_doc(doc_id: str, group_id: str, msg_id: str) -> None:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.executemany(
                 "INSERT INTO pdf_chunks (doc_id, idx, page_start, page_end,"
-                " section_path, char_len) VALUES (?,?,?,?,?,?)",
+                " section_path, char_len, text) VALUES (?,?,?,?,?,?,?)",
                 [
                     (
                         doc_id,
@@ -151,6 +198,7 @@ async def process_doc(doc_id: str, group_id: str, msg_id: str) -> None:
                         c.page_end,
                         c.section_path,
                         len(c.text),
+                        c.text[:800],
                     )
                     for c in chunks
                 ],
@@ -174,6 +222,7 @@ async def process_doc(doc_id: str, group_id: str, msg_id: str) -> None:
                     "chunk",
                     group_id,
                     vector,
+                    c.idx,
                 )
             except Exception:
                 embed_fail += 1
@@ -248,6 +297,11 @@ async def init_pdf_tables():
             page_start INTEGER, page_end INTEGER,
             section_path TEXT DEFAULT '', char_len INTEGER DEFAULT 0
         )""")
+        async with db.execute("PRAGMA table_info(pdf_chunks)") as cur:
+            cols = {r[1] for r in await cur.fetchall()}
+        if "text" not in cols:
+            await db.execute("ALTER TABLE pdf_chunks ADD COLUMN text TEXT DEFAULT ''")
+
         await db.commit()
 
 
@@ -325,8 +379,8 @@ async def download_and_register(
         await _insert(group_id, filename, 0, STATUS_FAILED, type(e).__name__, now)
 
 
-async def retrieve_for(group_id: str, query: str, top_k: int = 3) -> str | None:
-    """该群最近一份 done 文档 + 问题 → 带页码的要点块；无文档/无命中返回 None"""
+async def retrieve_for(group_id: str, query: str, top_k: int = 5) -> str | None:
+    """hybrid：向量top10 + BM25(trigram)top10 → RRF融合 → refs过滤 → top_k"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT doc_id, filename FROM pdf_docs"
@@ -338,11 +392,40 @@ async def retrieve_for(group_id: str, query: str, top_k: int = 3) -> str | None:
     if not row:
         return None
     doc_id, filename = row
-    vector = await embed_text(query[:200])
-    hits = await vector_store.search_doc_chunks(doc_id, vector, top_k=top_k)
-    if not hits:
+    rows = await _load_chunks(doc_id)
+    if not rows:
         return None
+
+    page2idx = {(r[2], r[3]): r[0] for r in rows}
+    vector = await embed_text(query[:200])
+    vec_hits = await vector_store.search_doc_chunks(doc_id, vector, top_k=10)
+
+    rrf: dict[int, float] = {}
+    for rank, h in enumerate(vec_hits):
+        sec = h.get("section_path", "")
+        if _is_refs(sec):
+            continue
+        idx = h.get("idx") or page2idx.get((h["page_start"], h["page_end"]))
+        if idx is None:
+            continue
+        rrf[idx] = rrf.get(idx, 0.0) + 1.0 / (60 + rank + 1)
+
+    bm = _bm25(query, [r[1] for r in rows])
+    for rank, i in enumerate(bm.argsort()[::-1][:10]):
+        if bm[i] <= 0:
+            continue
+        idx, _, _, _, sec = rows[int(i)]
+        if _is_refs(sec):
+            continue
+        rrf[idx] = rrf.get(idx, 0.0) + 1.0 / (60 + rank + 1)
+
+    if not rrf:
+        return None
+    picked = sorted(rrf, key=rrf.get, reverse=True)[:top_k]
+    by_idx = {r[0]: r for r in rows}
     lines = [f"【文档要点】《{filename}》相关内容："]
-    for h in hits:
-        lines.append(f"- (P{h['page_start']}-{h['page_end']}) {h['text'][:150]}")
+    for idx in picked:
+        r = by_idx[idx]
+        lines.append(f"- (P{r[2]}-{r[3]}) {r[1][:150]}")
+    print(f"[PDF] 追问检索: 命中{len(picked)}块 (BM25+向量RRF)")
     return "\n".join(lines)
